@@ -1,0 +1,28 @@
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# JAX / Tensorflow / PyTorch temporary files
+*.log
+*.out
+*.err
+
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Training outputs
+checkpoints/
+logs/
+results/
+outputs/
+tmp/
+temp/
+
+# Example datasets and large raw data
+data/
+datasets/
+*.xyz
+*.npy

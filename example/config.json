@@ -1,0 +1,74 @@
+{
+    "local_size": 1,
+    "force_table": true,
+    "stress_table": true,
+    "stress_sign": 1,
+    "restart": true,
+    "jnp_dtype": "float32",
+    "batchsize": 384,
+    "ncyc": 12,
+    "ntrain": 100004,
+    "Fshuffle": true,
+    "ene_shift": false,
+    "initpot": 0.0,
+    "init_weight": [
+        1.0,
+        10.0,
+        100.0
+    ],
+    "final_weight": [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "queue_size": 2,
+    "use_bias": false,
+    "use_norm": true,
+    "clip_norm": 0.2,
+    "seed": 20,
+    "pn": 6,
+    "npaircode": 32,
+    "natomcode": 16,
+    "cross_val": true,
+    "Epoch": 20000,
+    "warm_lr": 2e-5,
+    "warm_epoch": 5,
+    "slr": 2e-5,
+    "elr": 1e-06,
+    "patience_step": 20,
+    "cooldown": 0,
+    "decay_factor": 0.5,
+    "datafolder": "/users/ylz/jax/data/EMLP/train.xyz",
+    "weight_decay": 1e-09,
+    "cutoff": 5.0,
+    "max_l": 2,
+    "pmax_l": 2,
+    "nwave": 20,
+    "nradial": 20,
+    "maxneigh": 50,
+    "MP_loop": 3,
+    "emb_nl": [
+        2,
+        128,
+        2,
+        false
+    ],
+    "radial_nl": [
+        2,
+        64,
+        2,
+        false
+    ],
+    "MP_nl": [
+        2,
+        64,
+        2,
+        false
+    ],
+    "out_nl": [
+        2,
+        128,
+        2,
+        false
+    ]
+}

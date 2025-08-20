@@ -1,0 +1,103 @@
+#! /usr/bin/env python3
+
+import sys
+import numpy as np
+import model.MPNN as MPNN
+import dataloader_eval.dataloader as dataloader
+import dataloader_eval.cudaloader as cudaloader
+import jax
+from jax import vmap, jit
+import jax.numpy as jnp
+import orbax.checkpoint as oc
+from src.data_config import ModelConfig
+from src.read_json import load_config
+
+# 示例：读取配置文件
+full_config = load_config("full_config.json")
+if full_config.jnp_dtype=='float64':
+    jax.config.update("jax_enable_x64", True)
+
+if full_config.jnp_dtype=='float32':
+    jax.config.update("jax_default_matmul_precision", "highest")
+
+data_load = dataloader.Dataloader(full_config.maxneigh, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
+# generate random data for initialization
+
+#ntrain = data_load.ntrain
+numatoms = data_load.numatoms[:full_config.ntrain]
+ntrain = full_config.ntrain#jnp.sum(numatoms * numatoms)
+nforce = np.sum(numatoms) * 3
+
+nprop = 1
+prop_length = full_config.ntrain
+if full_config.force_table:
+    nprop = 2
+    prop_length = jnp.array(np.array([ntrain, nforce]))
+
+data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
+
+
+#==============================Equi MPNN==============================================================
+options = oc.CheckpointManagerOptions()
+ckpt = oc.CheckpointManager(full_config.ckpath, options=options)
+step = ckpt.latest_step()
+restored = ckpt.restore(step)
+params = restored["params"]
+model_config = restored["config"]
+
+config = ModelConfig(**model_config)
+
+model = MPNN.MPNN(config)
+#=================
+
+
+if full_config.force_table:
+    vmap_model = vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+else:
+    def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
+        return model.apply(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
+    vmap_model = vmap(get_energy, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+
+def make_loss(pes_model, nprop):
+
+    def get_loss(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop):
+
+        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+        ploss = jnp.zeros(nprop)
+        for i, iprop in enumerate(abprop):
+            ploss = ploss.at[i].set(jnp.sum(jnp.square(nnprop[i] - iprop)))
+        
+        return ploss
+
+
+    return get_loss
+ 
+value_fn = make_loss(vmap_model, nprop)       
+
+def val_loop(nstep):
+    def get_loss(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out):
+        def body(i, carry):
+            params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_fn = carry
+            inabprop = (iabprop[i] for iabprop in abprop)
+            ploss = value_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], shiftimage[i], center_factor[i], species[i], inabprop)
+            ploss_fn = ploss_fn + ploss
+            return params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_fn
+
+        disp_cell = jnp.zeros_like(cell)
+        params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out = \
+        jax.lax.fori_loop(0, nstep, body, (params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out))
+        return ploss_out
+    return jax.jit(get_loss)
+
+
+val_ens = val_loop(full_config.ncyc)
+ploss_val = jnp.zeros(nprop)        
+for data in data_load:
+    coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
+    ploss_val = val_ens(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
+    print(ploss_val)
+ploss_val = jnp.sqrt(ploss_val / prop_length)
+
+print(ploss_val)
+
+
