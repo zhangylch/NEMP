@@ -17,3 +17,7 @@ python3 $path/train
 where $path is the directory where the code is located. This command executes the train.py script inside the train folder.
 
 All training parameters are specified in the config.json file, and the accepted input data format is extended XYZ. Examples of config.json are provided in the examples folder.
+
+## References
+If you use this package, please cite these works.
+1. NEMP model: Yaolong Zhang and Hua Guo. [abs/2508.16086](https://arxiv.org/abs/2508.16086)
