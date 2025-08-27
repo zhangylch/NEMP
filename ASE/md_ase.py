@@ -17,22 +17,21 @@ fileobj=open("h2o.extxyz",'r')
 configuration = extxyz.read_extxyz(fileobj,index=slice(0,1))
 atoms = next(configuration)
 #atoms = atoms.repeat((2, 2, 2))
-calc=NEMP(skin=1.0, skin_neigh=7000, pbc=[1, 1, 1], getneigh=getneigh, fconfig='full_config.json', initatoms=atoms, properties=['energy', 'forces'])
+calc=NEMP(skin=1.0, skin_neigh=6700, pbc=[1, 1, 1], getneigh=getneigh, fconfig='full_config.json', initatoms=atoms, properties=['energy', 'forces'])
 #warm up
 calc.reset()
 atoms.calc=calc
 MBD(atoms,temperature_K=300)
-dyn = VV(atoms, timestep=0.25 * units.fs)
-dyn.run(steps=1)
+dyn = VV(atoms, timestep=0.1 * units.fs)
+dyn.run(steps=20)
 
 start=time.time()
-calc.reset()
-atoms.calc=calc
-MBD(atoms, temperature_K=300)
+#calc.reset()
+#atoms.calc=calc
+#MBD(atoms, temperature_K=300)
 dyn = VV(atoms, timestep=0.25 * units.fs, logfile='md.log', loginterval=100)
 dyn.run(steps=5000)
 #traj.close()
-print("hello3")
 
 end=time.time()
 print(start-end)

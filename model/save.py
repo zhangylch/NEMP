@@ -7,13 +7,12 @@ import jax.random as jrm
 from jax.numpy import dtype,array
 import flax.linen as nn
 from typing import Sequence, List, Union, Optional
+from low_level import MLP  # Refers to the final, robust MLP.py
 from flax.core import freeze
 from jax.lax import fori_loop
 from jax import Array
-# need to be updated for ase interface
-from ase.calculators.nemp import MLP     # need to be updated for ase interface
-from ase.calculators.nemp import sph_cal     # need to be updated for ase interface
-from ase.calculators.nemp.data_config import ModelConfig
+from low_level import sph_cal
+from src.data_config import ModelConfig
 
 
 
@@ -87,6 +86,7 @@ class MPNN(nn.Module):
         distsq = jnp.sum(jnp.square(distvec), axis=1)
         judge = distsq > eps
         distsq = jnp.where(judge, distsq, dtype_1)
+        #jax.debug.print("{x} {y}", x=jnp.min(distsq), y=jnp.max(distsq))
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq)
         sph = self.sph_cal(distvec.T / distances)
@@ -103,10 +103,8 @@ class MPNN(nn.Module):
         ave_neigh = jnp.where(ave_neigh > eps, ave_neigh, eps)[:, None]
 
         expand_spec = jnp.transpose(spec_emb[neighlist], (1, 0, 2)).reshape(-1, 2*self.config.nspec)
-        spec_emb = jnp.less(jnp.sum(jnp.abs(expand_spec[:, None] - self.config.com_spec), axis=-1), 0.5).astype(neighlist.dtype)
-        expand_indices = jnp.argmax(spec_emb.astype(dtype), axis=1)
-
-        pair_spec = self.neighcoeffnn(self.config.com_spec.astype(dtype))
+        com_spec, expand_indices = jnp.unique(expand_spec, axis=0, size=self.config.ncom_spec, return_inverse=True, fill_value=1)
+        pair_spec = self.neighcoeffnn(com_spec.astype(dtype))
 
         emb_coeff = self.neighnn(pair_spec)[expand_indices]
         rweight = self.rweightnn(pair_spec)[expand_indices]

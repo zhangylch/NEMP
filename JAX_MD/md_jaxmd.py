@@ -14,8 +14,9 @@ from functools import partial
 import orbax.checkpoint as oc
 from src.data_config import ModelConfig
 from src.read_json import load_config
+from ASE.nemp.convert_type import convert_dtype
 import model.MPNN as MPNN
-import JAX_MD_AS.build_neigh as build_neigh
+import JAX_MD.build_neigh as build_neigh
 import fortran.getneigh as getneigh
 
 from ase import Atoms
@@ -29,26 +30,27 @@ def stop_grad(variables):
     new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
     return traverse_util.unflatten_dict(new_vars)
 
+
 #UNIT DEFINATION the default mass is amu, so if you use eV as your output energy unitand angstrom as the unit of your coordinates, then the unit of time is around 10.18fs
 
 
 #give the parameters
 skin = 1.0
 temperature = 0.025 # in the unit of energy of your ML 
-maxneigh = 7400 * 32
-skin_neigh = 6600 * 32
+maxneigh = 7300  
+skin_neigh = 7000 
 steps_per_block = 10  # step for update the neighlist
-total_blocks = 20  # step_per_block * total_block will the total number of MD step
+total_blocks = 500  # step_per_block * total_block will the total number of MD step
 # system setting
 ev_kt=11604.568449040902
 time_fs = 10.180507
 target_temp = 300.0  # kelvin
 print_traj = True
-time_step_fs = 0.1 # fs
-print_step = 50 # fs
+time_step_fs = 0.2 # fs
+print_step = 2 # fs
 logfile = open("md.log", 'w')
 trajfile = open("traj.extxyz", 'w')
-thermo_time = 100  # fs
+thermo_time = 1  # fs
 tau = 100
 
 
@@ -71,15 +73,17 @@ if full_config.jnp_dtype=='float32':
 if "32" in full_config.jnp_dtype:
     int_dtype = np.int32
     float_dtype = np.float32
+    jnp_dtype = jnp.float32
 else:
     int_dtype = np.int64
     float_dtype = np.float64
+    jnp_dtype = jnp.float64
 
 
 fileobj=open("h2o.extxyz",'r')
 configuration = extxyz.read_extxyz(fileobj,index=slice(0,1))
 atoms = next(configuration)
-atoms = atoms.repeat((4, 4, 2))
+#atoms = atoms.repeat((2, 2, 2))
 
 key = random.PRNGKey(0)
 
@@ -107,6 +111,7 @@ restored = ckpt.restore(step)
 params = restored["params"]
 params = stop_grad(params)
 model_config = restored["config"]
+model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
 
 config = ModelConfig(**model_config)
 
@@ -124,10 +129,10 @@ def energy_fn(positions, cell, neighlist):
 
 #jit_energy_fn = jax.jit(energy_fn)
 
-init_fn, apply_fn = simulate.nvt_nose_hoover(energy_fn, shift_fn, time_step, target_temp, tau=tau)
+init_fn, apply_fn = simulate.nve(energy_fn, shift_fn, time_step)
 
 
-state = init_fn(key, positions_gpu, mass=masses, cell=cell_gpu, neighlist=neighlist)
+state = init_fn(key, positions_gpu, temperature, mass=masses, cell=cell_gpu, neighlist=neighlist)
 # for npt and cell opt another box in state are required
 #state = init_fn(key, positions, temperature, cell=cell_gpu, neighlist=cut_neighlist, mass=masses, box=cell)
 
@@ -157,10 +162,10 @@ def cpu_worker():
             break
 
         positions_cpu, step, temp = jax.device_get(data)
-        #if np.mod(step, print_step) < 1.0 and step > thermo_step:
-        #    logfile.write("time = {:10.3f}, temperature = {:7.2f} K \n".format(step * time_step_fs/1000.0, temp * ev_kt * 2.0 / (3.0 * positions_cpu.shape[0])))
-        #    atoms.positions = positions_cpu
-        #    extxyz.write_extxyz(trajfile, atoms)
+        if np.mod(step, print_step) < 1.0 and step > thermo_step:
+            logfile.write("time = {:10.3f}, temperature = {:7.2f} K \n".format(step * time_step_fs/1000.0, temp * ev_kt * 2.0 / (3.0 * positions_cpu.shape[0])))
+            atoms.positions = positions_cpu
+            extxyz.write_extxyz(trajfile, atoms)
 
         data = neigh_fn.update(positions_cpu, cell)
 
@@ -184,7 +189,7 @@ for i in range(total_blocks):
     
     neighlist = neighbor_list_queue.get()
     
-    #temp = quantity.kinetic_energy(velocity=state.velocity, mass=state.mass)
+    temp = quantity.kinetic_energy(velocity=state.velocity, mass=state.mass)
     step = step + steps_per_block
     
 end_time = time.time()
