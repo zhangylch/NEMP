@@ -107,12 +107,9 @@ for data in data_load:
     ploss_val1 = ploss_val
     coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
     ploss_val = val_ens(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
-    if (ploss_val - ploss_val1)[0]/jnp.sum(center_factor) > 0.005:
-        print(num, ploss_val - ploss_val1)
-    num+=1
     
 ploss_val = ploss_val / prop_length
 
-print(ploss_val * 23.059241279)
+print(ploss_val)
 
 
