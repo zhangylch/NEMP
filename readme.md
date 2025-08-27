@@ -12,7 +12,7 @@ Molecular dynamics (MD) simulations can be performed using the JAX-MD package to
 ## Examples:
 Training can be performed by running the following command:
 ```
-python3 $path/train
+python3 $path "train"
 ```
 where $path is the directory where the code is located. This command executes the train.py script inside the train folder.
 
