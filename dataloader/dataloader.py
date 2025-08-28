@@ -70,10 +70,16 @@ class Dataloader():
             self.std = 1.0
  
         #  statical over species
-        self.reduce_spec = np.unique(expand_species)
-        nspec = self.reduce_spec.shape[0]
+        reduce_spec = np.unique(expand_species)
+        nspec = reduce_spec.shape[0]
         self.ncom_spec = nspec * nspec
         self.nspec = nspec
+        reduce_emb = jnp.less(jnp.abs(reduce_spec[:, None] - reduce_spec), 0.5).astype(self.int_dtype)
+        indices = np.arange(nspec)
+        grid_x, grid_y = jnp.meshgrid(indices, indices, indexing='ij')
+        expand_indices = jnp.stack([grid_x.flatten(), grid_y.flatten()], axis=1)
+        self.com_spec = jnp.array(reduce_emb[expand_indices].reshape(-1, 2*nspec).astype(self.int_dtype))
+        self.reduce_spec = jnp.array(reduce_spec.astype(self.int_dtype))
  
         if Fshuffle:
             self.shuffle_list = np.random.RandomState(seed=self.key).permutation(self.numpoint)
