@@ -329,8 +329,15 @@ ckpt_cpu = oc.CheckpointManager(
   options=options,
 )
 
+ckpt_state["params"] = params
 ckpt.save(0, args=oc.args.StandardSave(ckpt_state))
+ckpt_state["params"] = ema_params
+ckpt.save(1, args=oc.args.StandardSave(ckpt_state))
+
+ckpt_state_cpu["params"] = params
 ckpt_cpu.save(0, args=oc.args.StandardSave(ckpt_state_cpu))
+ckpt_state_cpu["params"] = ema_params
+ckpt_cpu.save(1, args=oc.args.StandardSave(ckpt_state_cpu))
 
 
 train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, full_config.warm_lr, full_config.slr, full_config.elr, full_config.warm_epoch, full_config.Epoch, full_config.ncyc, full_config.ntrain, nval, nprop)
