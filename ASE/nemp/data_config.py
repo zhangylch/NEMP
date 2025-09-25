@@ -14,6 +14,7 @@ class ModelConfig:
     radial_nl: Sequence[Union[int, bool]] # nblock, feature, nlayer
     out_nl: Sequence[Union[int, bool]]
     reduce_spec: Any = field(default=None, metadata={'pytree': True})
+    com_spec: Any = field(default=None, metadata={'pytree': True}) 
     count_l: Any = field(default=None, metadata={'pytree': True})
     index_l: Any = field(default=None, metadata={'pytree': True})
     index_i1: Any = field(default=None, metadata={'pytree': True})

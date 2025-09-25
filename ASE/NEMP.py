@@ -2,6 +2,7 @@ import os
 import jax
 import jax.numpy as jnp
 from ase import Atoms
+from ase.stress import full_3x3_to_voigt_6_stress
 from ase.calculators.calculator import Calculator
 import numpy as np
 import ase.calculators.nemp.MPNN as MPNN
