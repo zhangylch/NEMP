@@ -71,7 +71,7 @@ class MPNN(nn.Module):
         dtype_1 = jnp.array(1.0, dtype=dtype)
         dtype_2 = jnp.array(2.0, dtype=dtype)
         dtype_3 = jnp.array(3.0, dtype=dtype)
-        eps = jnp.array(1e-5, dtype=dtype)
+        eps = jnp.array(1e-8, dtype=dtype)
 
         numatom = cart.shape[0]
         symm_cell = (disp_cell + disp_cell.T) / dtype_2
@@ -86,12 +86,11 @@ class MPNN(nn.Module):
         distvec = expand_cart[1] - expand_cart[0] + shiftimage
         distsq = jnp.sum(jnp.square(distvec), axis=1)
         judge = distsq > eps
-        distsq = jnp.where(judge, distsq, dtype_1)
         neigh_factor = judge.astype(dtype)
-        distances = jnp.sqrt(distsq)
+        distances = jnp.sqrt(distsq + eps)
         sph = self.sph_cal(distvec.T / distances)
         sph_norm = jnp.zeros((rmaxl_i, sph.shape[1]), dtype=dtype).at[self.config.index_l].add(jnp.square(sph))
-        sph_norm = jnp.where(judge, sph_norm, dtype_1)
+        sph_norm = sph_norm + eps
         sph = sph / jnp.sqrt(sph_norm[self.config.index_l]) * jnp.sqrt(dtype_2 * self.config.index_l[:, None] + dtype_1)
 
         norm_dist = distances / cutoff_f
@@ -100,7 +99,7 @@ class MPNN(nn.Module):
         cut_func = poly_env * poly_env * neigh_factor
 
         ave_neigh = jnp.zeros(numatom, dtype=dtype).at[neighlist[0]].add(cut_func)
-        ave_neigh = jnp.where(ave_neigh > eps, ave_neigh, eps)[:, None]
+        ave_neigh = ave_neigh[:, None] + eps
 
         expand_spec = jnp.transpose(spec_emb[neighlist], (1, 0, 2)).reshape(-1, 2*self.config.nspec)
         spec_emb = jnp.less(jnp.sum(jnp.abs(expand_spec[:, None] - self.config.com_spec), axis=-1), 0.5).astype(neighlist.dtype)

@@ -2,6 +2,7 @@ import os
 import jax
 import jax.numpy as jnp
 from ase import Atoms
+from ase.constraints import FixAtoms
 from ase.stress import full_3x3_to_voigt_6_stress
 from ase.calculators.calculator import Calculator
 import numpy as np
@@ -30,7 +31,18 @@ class NEMP(Calculator):
         Calculator.__init__(self, **kwargs)
 
         full_config = load_config(fconfig)
-        self.atomic_energy = self.full_config.initpot
+        self.atomic_energy = full_config.initpot
+        self.fixed_cart = None
+
+        self.found_fixed_atoms = False
+        if initatoms.constraints:
+            
+            for constr in initatoms.constraints:
+                # 检查这个约束的类型是不是 FixAtoms
+                if isinstance(constr, FixAtoms):
+                    self.found_fixed_atoms = True
+                    # 如果是，就用 .get_indices() 方法获取索引
+                    self.fixed_indices = constr.get_indices()
 
         if "32" in full_config.jnp_dtype:
             self.int_dtype = np.int32
@@ -68,7 +80,7 @@ class NEMP(Calculator):
         options = oc.CheckpointManagerOptions()
         ckpt = oc.CheckpointManager(ckpath, options=options)
         step = ckpt.latest_step()
-        restored = ckpt.restore(step)
+        restored = ckpt.restore(step-1)
         params = restored["params"]
         model_config = restored["config"]
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
@@ -145,8 +157,14 @@ class NEMP(Calculator):
         if self.skin_judge:
             cart = self.initialize_system(atoms, system_changes)
             atoms.set_positions(cart)
+            if self.found_fixed_atoms:
+                self.fixed_cart = cart[self.fixed_indices]
+
 
         positions = atoms.get_positions()
+        if self.found_fixed_atoms:
+            positions[self.fixed_indices] = self.fixed_cart
+
         positions = jax.device_put(positions.astype(self.np_dtype))
 
         positions, distvec, skin_judge, neighlist, shifts = self.cut_neigh(positions, self.cell, self.neighlist, self.shifts, self.old_distvec)
@@ -160,12 +178,13 @@ class NEMP(Calculator):
         
 
         for name, iprop in zip(self.properties, results):
+            iprop = iprop.astype(np.float64)
             if "stress" in name:
                 virial = iprop
                 stress = virial/atoms.get_volume()
                 iprop = full_3x3_to_voigt_6_stress(stress)
 
-            if "energy" in iprop:
-                iprop = iprop + positions.shape[0] * self.atomic_energy
-                print(iprop)
+            #if "energy" in iprop:
+            #    iprop = iprop + positions.shape[0] * self.atomic_energy
+            #    print(iprop)
             self.results[name] = iprop
