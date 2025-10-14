@@ -214,13 +214,13 @@ if full_config.stress_table:
         ene, (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
         volume = jnp.dot(cell[0], jnp.cross(cell[1], cell[2]))
         return ene, force, stress/volume*jnp.array(full_config.stress_sign)
-    vmap_model = jax.jit(vmap(get_force_stress, in_axes=(None, 0, 0, 0, 0, 0, 0, 0)))
+    vmap_model = vmap(get_force_stress, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
 elif full_config.force_table:
-    vmap_model = jax.jit(vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0)))
+    vmap_model = vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
 else:
     def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
         return model.apply(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
-    vmap_model = jax.jit(vmap(get_energy, in_axes=(None, 0, 0, 0, 0, 0, 0, 0)))
+    vmap_model = vmap(get_energy, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
 
 def make_gradient(pes_model):
 

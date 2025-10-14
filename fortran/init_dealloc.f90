@@ -6,22 +6,23 @@ module initmod
      use constant
      implicit none
      integer(kind=intype) :: interaction, length
-     integer(kind=intype) :: nimage(3)
+     integer(kind=intype) :: nimage(3), pbc(3)
      real(kind=typenum) :: rc, rcsq, coeff
      real(kind=typenum) :: matrix(3, 3), inv_matrix(3, 3)
      real(kind=typenum) :: dier ! "dier" is the side length of the box used in cell-linked 
 end module
 
-subroutine init_neigh(in_rc, in_dier, cell, pbc)
+subroutine init_neigh(in_rc, in_dier, cell, pbc_tmp)
      use constant
      use initmod
      implicit none
      real(kind=typenum),intent(in) :: in_rc, in_dier, cell(3,3)
-     integer(kind=intype), intent(in) :: pbc(3)
+     integer(kind=intype), intent(in) :: pbc_tmp(3)
      real(kind=typenum) :: dface(3), V
        rc=in_rc
        rcsq=rc*rc
        matrix=cell
+       pbc = pbc_tmp
 !Note that the fortran store the array with the column first, so the lattice parameters is the transpose of the its realistic shape
        call calculate_face_distances(cell, dface, V)
        dier=in_dier + 0.0001

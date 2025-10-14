@@ -6,7 +6,7 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh, batchsize, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=True, ntrain=10):
+    def __init__(self, maxneigh, batchsize, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=False, ntrain=10):
             
         self.cutoff = cutoff
         self.batchsize = batchsize

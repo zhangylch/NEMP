@@ -24,7 +24,7 @@ subroutine get_neigh(cart,coor,atomindex,shifts,maxneigh,numatom,scutnum)
          ! we comment out these codes to keep the original coor and these require
          ! that the coordina are in the same cell.
          sca=nint(fcoor(:,iatom)-fcoor(:,1))
-         coor(:,iatom)=coor(:,iatom)-sca(1)*matrix(:,1)-sca(2)*matrix(:,2)-sca(3)*matrix(:,3)
+         coor(:,iatom)=coor(:,iatom)-sca(1)*matrix(:,1)*pbc(1)-sca(2)*matrix(:,2)*pbc(2)-sca(3)*matrix(:,3)*pbc(3)
          do j=1,3
            if(coor(j,iatom)<oriminv(j)) then
              oriminv(j)=coor(j,iatom)
@@ -116,6 +116,9 @@ subroutine get_neigh(cart,coor,atomindex,shifts,maxneigh,numatom,scutnum)
        deallocate(index_rs)
        atomindex(:,scutnum+1:maxneigh)=0
        shifts(:, scutnum+1:maxneigh)=0.0
+       do iatom=1,numatom
+         coor(:,iatom)=coor(:,iatom)+oriminv
+       end do
      return
 end subroutine get_neigh
    

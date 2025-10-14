@@ -30,6 +30,7 @@ class NEMP(Calculator):
         Calculator.__init__(self, **kwargs)
 
         full_config = load_config(fconfig)
+        self.atomic_energy = self.full_config.initpot
 
         if "32" in full_config.jnp_dtype:
             self.int_dtype = np.int32
@@ -151,7 +152,6 @@ class NEMP(Calculator):
         positions, distvec, skin_judge, neighlist, shifts = self.cut_neigh(positions, self.cell, self.neighlist, self.shifts, self.old_distvec)
         self.skin_judge = skin_judge
         if self.skin_judge:
-            print("hello")
             self.old_distvec = distvec
 
         results = self.pes(self.params, positions, self.cell, self.disp_cell, neighlist, shifts, self.center_factor, self.species)
@@ -164,4 +164,8 @@ class NEMP(Calculator):
                 virial = iprop
                 stress = virial/atoms.get_volume()
                 iprop = full_3x3_to_voigt_6_stress(stress)
+
+            if "energy" in iprop:
+                iprop = iprop + positions.shape[0] * self.atomic_energy
+                print(iprop)
             self.results[name] = iprop
