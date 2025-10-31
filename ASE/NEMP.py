@@ -69,7 +69,7 @@ class NEMP(Calculator):
         self.neighlist = None
         self.species = None
         self.disp_cell = jnp.zeros((3,3))
-        self.pbc = np.array(pbc, dtype=self.int_dtype)
+        self.pbc = np.array(pbc, dtype=np.int32)
         self.old_positions = initatoms.get_positions()
         self.properties = properties
         self.cut_neigh = self._cut_neigh()
