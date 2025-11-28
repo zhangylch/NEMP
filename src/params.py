@@ -83,7 +83,7 @@ key = jax.random.split(key, 2)
 index_i1, index_i2, ens_cg, index_add, index_den, index_squ, initbias_cg, index_l, count_l, num_cg= \
     contract_sph(rmaxl, prmaxl)
 
-initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.1
+initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.01
 
 sph_pes=sph_cal.SPH_CAL(max_l = rmaxl-1)
 

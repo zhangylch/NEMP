@@ -40,7 +40,6 @@ class MPNN(nn.Module):
 
         self.l_coeff = self.param('l_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.nspec, self.config.num_cg, self.config.nwave), dtype)
 
-        # Pass the inferred dtype to all MLP sub-modules for consistency
         self.neighcoeffnn = MLP.MLP(num_output = self.config.npaircode, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=True, bias_init_value = jnp.ones(self.config.npaircode), cst=self.config.cst, dtype=dtype)
 
         self.neighnn = MLP.MLP(num_output = self.config.nradial, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=True, bias_init_value = self.config.initbias_neigh, cst=self.config.cst, dtype=dtype)
@@ -101,20 +100,19 @@ class MPNN(nn.Module):
         ave_neigh = jnp.zeros(numatom, dtype=dtype).at[neighlist[0]].add(cut_func)
         ave_neigh = ave_neigh[:, None] + eps
 
-        expand_spec = jnp.transpose(spec_emb[neighlist], (1, 0, 2)).reshape(-1, 2*self.config.nspec)
+        expand_spec = species[neighlist].T
         spec_emb = jnp.less(jnp.sum(jnp.abs(expand_spec[:, None] - self.config.com_spec), axis=-1), 0.5).astype(neighlist.dtype)
         expand_indices = jnp.argmax(spec_emb.astype(dtype), axis=1)
-
-        pair_spec = self.neighcoeffnn(self.config.com_spec.astype(dtype))
+        pair_spec = self.neighcoeffnn(self.config.com_spec)
 
         emb_coeff = self.neighnn(pair_spec)[expand_indices]
-        rweight = self.rweightnn(pair_spec)[expand_indices]
-        smooth_weight = rweight * cut_func[:, None]
-        radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None]
-        radial_func = jnp.concatenate((smooth_weight[:, :-nwave_i], radial_func), axis=1)
+        init_ead = self.rweightnn(pair_spec)[expand_indices]
+        smooth_ead = init_ead * cut_func[:, None]
+        radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None] * dtype_2
+        radial_func = jnp.concatenate((smooth_ead[:, nwave_i:], radial_func), axis=1)
 
         wradial = self.radialnn(radial_func).reshape(-1, 4*prmaxl_i+2, nwave_i)
-        ead = jnp.concatenate((smooth_weight[:, -nwave_i:], wradial[:, -1]), axis=1)
+        ead = jnp.concatenate((smooth_ead[:, :nwave_i], wradial[:, -1]), axis=1)
         density = jnp.zeros((numatom, nwave_i), dtype=dtype).at[neighlist[0]].add(wradial[:, -2])
 
         pindex_l = self.config.index_l[:pnorb_i]

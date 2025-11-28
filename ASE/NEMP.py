@@ -33,6 +33,7 @@ class NEMP(Calculator):
         full_config = load_config(fconfig)
         self.atomic_energy = full_config.initpot
         self.fixed_cart = None
+        self.capacity = 1.5
 
         self.found_fixed_atoms = False
         if initatoms.constraints:
@@ -124,7 +125,7 @@ class NEMP(Calculator):
         positions = atoms.get_positions()
         if "cell" in system_changes:
             cell = atoms.get_cell()
-            self.getneigh.init_neigh(self.cutoff+self.skin, self.cutoff+self.skin, cell.T, self.pbc)
+            self.getneigh.init_neigh(self.cutoff+self.skin, self.cutoff+self.skin, cell.T, self.pbc, self.capacity)
             self.cell = jax.device_put(cell.astype(self.np_dtype))
 
         cart, neighlist, shifts, scutnum = self.getneigh.get_neigh(positions.T, np.int32(self.ghostneigh))

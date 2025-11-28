@@ -165,7 +165,6 @@ with open("full_config.json", "w") as f:
 # get some system information
 ntrain = full_config.ntrain
 nval = data_load.nval
-ncom_spec = data_load.ncom_spec
 nspec = data_load.nspec
 reduce_spec = data_load.reduce_spec
 com_spec = data_load.com_spec
@@ -194,7 +193,7 @@ coor, cell, neighlist, shiftimage, center_factor, species, abprop = data_on_gpu0
 initdata = (coor[0, 0], cell[0, 0], jnp.zeros((3,3)), neighlist[0, 0], shiftimage[0, 0], center_factor[0, 0], species[0, 0])
 
 #=================================================Equi MPNN===================================================================
-config = ModelConfig(ncom_spec=ncom_spec, nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, npaircode=full_config.npaircode, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
+config = ModelConfig(nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
 
 model = MPNN.MPNN(config)
 

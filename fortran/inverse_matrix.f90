@@ -1,22 +1,38 @@
-    subroutine inverse_matrix(matrix,inv_matrix)
+subroutine inverse_matrix(matrix,inv_matrix)
     use constant
     implicit none
     real(kind=typenum) :: matrix(3,3),inv_matrix(3,3)
     real(kind=typenum) :: tmp(3,3)
     real(kind=typenum),allocatable :: work(:)
-    integer(kind=intype) :: lwork,ipiv(3),info
-    lwork=-1
-222 tmp=matrix
+    real(kind=typenum) :: work_query(1) ! 用于 lwork 查询的临时数组
+    integer(kind=intype) :: lwork_optimal, lwork
+    integer(kind=intype) :: ipiv(3),info
+
+    ! 步骤 1: 将矩阵复制到 tmp 并执行 LU 分解 (只执行一次)
+    tmp=matrix
     ipiv=0
-    allocate(work(max(1,lwork)))
     call dgetrf(3,3,tmp,3,ipiv,info)
-    call dgetri(3,tmp,3,ipiv,work,lwork,info)
-    if(lwork==-1) then
-      lwork=int(work(1))
-      deallocate(work)
-      goto 222
-    end if
+
+    ! (可选) 检查 dgetrf 是否成功
+    ! if (info /= 0) then ...
+
+    ! 步骤 2: 使用 lwork=-1 查询 dgetri 的最优工作空间大小
+    lwork=-1
+    ! dgetri 会将最优大小写入 work_query(1)
+    call dgetri(3,tmp,3,ipiv,work_query,lwork,info) 
+    lwork_optimal=int(work_query(1))
+
+    ! 步骤 3: 分配正确大小的 work 数组并执行计算
+    allocate(work(lwork_optimal))
+    ! 使用 lwork_optimal 再次调用
+    call dgetri(3,tmp,3,ipiv,work,lwork_optimal,info)
+
+    ! (可选) 检查 dgetri 是否成功
+    ! if (info /= 0) then ...
+
+    ! 步骤 4: 释放内存并返回结果
     deallocate(work)
     inv_matrix=tmp
     return
-    end subroutine
+ 
+end subroutine

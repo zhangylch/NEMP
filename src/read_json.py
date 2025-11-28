@@ -27,8 +27,6 @@ class JsonConfig:
     clip_norm: float = field(default=2.5)
     seed: int = field(default=20)
     pn: int = field(default=2)
-    npaircode: int = field(default=16)
-    natomcode: int = field(default=8)
     cross_val: bool = field(default=False)
     #========================parameters for optim=======================
     Epoch: int = field(default=20000)                    # total numbers of epochs for fitting 
@@ -47,6 +45,7 @@ class JsonConfig:
     weight_decay: float = field(default=1e-9)
     
     cutoff: float = field(default=5.0)
+    npaircode: int = field(default=32)
     max_l: int = field(default=3)
     pmax_l: int = field(default=2)
     nwave: int = field(default=64)
@@ -54,12 +53,10 @@ class JsonConfig:
     maxneigh: int = field(default=26)
     MP_loop: int = field(default=3)
     
-    #===============================embedded NN structure==========
-    emb_nl: List[Any] = field(default_factory = lambda: [2, 128, 2, False])  # nblock, nfeature, nlayer, Layer_norm
-    
-    radial_nl: List[Any] = field(default_factory = lambda: [1, 128, 2, True])
-    MP_nl: List[Any] = field(default_factory = lambda: [1, 256, 0, True])
-    out_nl: List[Any] = field(default_factory = lambda: [1, 16, 0, True])  # nblock, nfeature, nlayer, Layer_norm
+    emb_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])
+    radial_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])
+    MP_nl: List[Any] = field(default_factory = lambda: [1, 64, 0, True])
+    out_nl: List[Any] = field(default_factory = lambda: [1, 128, 0, True])  # nblock, nfeature, nlayer, Layer_norm
 
 
 def load_config(json_path: str) -> JsonConfig:

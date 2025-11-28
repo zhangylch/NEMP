@@ -6,9 +6,10 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=True, ntrain=10):
+    def __init__(self, maxneigh, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5):
             
         self.cutoff = cutoff
+        self.capacity = capacity
         self.batchsize = batchsize
         self.ncyc = ncyc
         self.local_size = local_size
@@ -71,15 +72,11 @@ class Dataloader():
  
         #  statical over species
         reduce_spec = np.unique(expand_species)
-        nspec = reduce_spec.shape[0]
-        self.ncom_spec = nspec * nspec
-        self.nspec = nspec
-        reduce_emb = jnp.less(jnp.abs(reduce_spec[:, None] - reduce_spec), 0.5).astype(self.int_dtype)
-        indices = np.arange(nspec)
-        grid_x, grid_y = jnp.meshgrid(indices, indices, indexing='ij')
-        expand_indices = jnp.stack([grid_x.flatten(), grid_y.flatten()], axis=1)
-        self.com_spec = jnp.array(reduce_emb[expand_indices].reshape(-1, 2*nspec).astype(self.int_dtype))
+        self.nspec = reduce_spec.shape[0]
         self.reduce_spec = jnp.array(reduce_spec.astype(self.int_dtype))
+        x, y = np.meshgrid(self.reduce_spec, self.reduce_spec)
+        self.com_spec = jnp.array(np.stack([x.ravel(), y.ravel()], axis=1).astype(self.float_dtype))
+       
  
         if Fshuffle:
             self.shuffle_list = np.random.RandomState(seed=self.key).permutation(self.numpoint)
@@ -117,7 +114,7 @@ class Dataloader():
                 icell = self.cell[i].T
                 icart = self.coordinates[i]
                 ipbc = self.pbc[i]
-                getneigh.init_neigh(self.cutoff, self.cutoff, icell, ipbc)
+                getneigh.init_neigh(self.cutoff, self.cutoff, icell, ipbc, self.capacity)
                 cart, tmp, tmp1, scutnum = getneigh.get_neigh(icart, np.int32(self.maxneigh))
                 coor[inum, :self.numatoms[i]] = cart.T
                 neighlist[inum] = tmp

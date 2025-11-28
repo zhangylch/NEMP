@@ -12,21 +12,22 @@ python module getneigh ! in
             integer(kind=4) :: interaction
             integer(kind=4) :: length
             integer(kind=4) dimension(3) :: nimage
-            integer(kind=4) dimension(3) :: pbc
             real(kind=8) :: rc
             real(kind=8) :: rcsq
             real(kind=8) :: coeff
+            real(kind=8) :: capacity
             real(kind=8) dimension(3,3) :: matrix
             real(kind=8) dimension(3,3) :: inv_matrix
             real(kind=8) :: dier
         end module initmod
-        subroutine init_neigh(in_rc,in_dier,cell,pbc_tmp) ! in :getneigh:init_dealloc.f90
+        subroutine init_neigh(in_rc,in_dier,cell,pbc,times_neigh) ! in :getneigh:init_dealloc.f90
             use constant
             use initmod
             real(kind=8) intent(in) :: in_rc
             real(kind=8) intent(in) :: in_dier
             real(kind=8) dimension(3,3),intent(in) :: cell
-            integer(kind=4) dimension(3),intent(in) :: pbc_tmp
+            integer(kind=4) dimension(3),intent(in) :: pbc
+            real(kind=8) intent(in) :: times_neigh
         end subroutine init_neigh
         subroutine cross(a,b,c) ! in :getneigh:init_dealloc.f90
             use constant
@@ -64,6 +65,6 @@ python module getneigh ! in
     end interface 
 end python module getneigh
 
-! This file was auto-generated with f2py (version:2.3.1).
+! This file was auto-generated with f2py (version:2.2.6).
 ! See:
 ! https://web.archive.org/web/20140822061353/http://cens.ioc.ee/projects/f2py2e

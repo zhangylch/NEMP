@@ -6,7 +6,6 @@ from jax import Array
 #save the arguement for inference 
 @dataclass
 class ModelConfig:
-    ncom_spec: int
     nspec: int
     num_cg: int
     emb_nl: Sequence[Union[int, bool]] # nblock, feature, nlayer
@@ -14,7 +13,7 @@ class ModelConfig:
     radial_nl: Sequence[Union[int, bool]] # nblock, feature, nlayer
     out_nl: Sequence[Union[int, bool]]
     reduce_spec: Any = field(default=None, metadata={'pytree': True})
-    com_spec: Any = field(default=None, metadata={'pytree': True}) 
+    com_spec: Any = field(default=None, metadata={'pytree': True})
     count_l: Any = field(default=None, metadata={'pytree': True})
     index_l: Any = field(default=None, metadata={'pytree': True})
     index_i1: Any = field(default=None, metadata={'pytree': True})
@@ -30,10 +29,10 @@ class ModelConfig:
     cst: float = 1.67462
     std: float = 1.0
     nwave: int = 16
+    npaircode: int = 32
     nradial: int = 8
     rmaxl: int = 3
     prmaxl: int = 2
     MP_loop: int = 2
     pn: int = 6
-    npaircode: int = 8
 
