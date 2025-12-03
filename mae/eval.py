@@ -25,7 +25,7 @@ data_load = dataloader.Dataloader(full_config.maxneigh, full_config.batchsize, i
 
 #ntrain = data_load.ntrain
 numatoms = data_load.numatoms[:full_config.ntrain]
-ntrain = full_config.ntrain #jnp.sum(numatoms)
+ntrain = jnp.sum(numatoms)
 nforce = np.sum(numatoms) * 3
 
 nprop = 1

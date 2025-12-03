@@ -108,7 +108,7 @@ class MPNN(nn.Module):
         emb_coeff = self.neighnn(pair_spec)[expand_indices]
         init_ead = self.rweightnn(pair_spec)[expand_indices]
         smooth_ead = init_ead * cut_func[:, None]
-        radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None] * dtype_2
+        radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None]
         radial_func = jnp.concatenate((smooth_ead[:, nwave_i:], radial_func), axis=1)
 
         wradial = self.radialnn(radial_func).reshape(-1, 4*prmaxl_i+2, nwave_i)
