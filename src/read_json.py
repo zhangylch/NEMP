@@ -26,6 +26,7 @@ class JsonConfig:
     use_norm: bool = field(default=False)
     clip_norm: float = field(default=2.5)
     seed: int = field(default=20)
+    data_seed: int = field(default=20)
     pn: int = field(default=2)
     cross_val: bool = field(default=False)
     #========================parameters for optim=======================

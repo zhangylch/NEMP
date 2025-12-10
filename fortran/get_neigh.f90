@@ -5,7 +5,7 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
      integer(kind=intype),intent(in) :: maxneigh, numatom
      integer(kind=intype),intent(out) :: atomindex(2,maxneigh)
      integer(kind=intype),intent(out) :: scutnum
-     integer(kind=intype) :: num, iatom, ninit, i, j, k, l, i1, i2, i3
+     integer(kind=intype) :: iatom, ninit, i, j, k, l, i1, i2, i3
      integer(kind=intype) :: sca(3), boundary(2,3), rangebox(3)
      integer(kind=intype),allocatable :: index_numrs(:,:,:,:,:)
      integer(kind=intype),allocatable :: index_rs(:,:,:)

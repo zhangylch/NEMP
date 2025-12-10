@@ -59,7 +59,7 @@ subroutine calculate_face_distances(cell, dface, V)
     implicit none
     real(kind=typenum) :: cell(3, 3)
     real(kind=typenum) :: dface(3), dist
-    real(kind=typenum) :: area(3), a(3), b(3), c(3), a1(3), b1(3), c1(3), V
+    real(kind=typenum) :: a(3), b(3), c(3), a1(3), b1(3), c1(3), V
 
     a = cell(:, 1)
     b = cell(:, 2)

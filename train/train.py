@@ -21,7 +21,7 @@ from typing import Optional, Any
 
 
 # train function
-def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop):
+def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop):
 
     def train_loop(nstep):
 
@@ -41,12 +41,8 @@ def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_
             
             coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
             disp_cell = jnp.zeros_like(cell)
-            tmp_params = params
-            tmp_state = opt_state
-            tmp_ema = ema_params 
             params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out = \
             jax.lax.fori_loop(0, nstep, body, (params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out))
-            params, opt_state, ema_params = jax.lax.cond(jnp.isnan(loss_out), lambda _: (tmp_params, tmp_state, tmp_ema), lambda _: (params, opt_state, ema_params), None)
             return params, opt_state, ema_params, loss_out
 
         return optimize_epoch
@@ -74,7 +70,6 @@ def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_
     train_ens = jax.pmap(train_loop(ncyc), axis_name="train_GPUs")
     val_ens = jax.pmap(val_loop(ncyc), axis_name="val_GPUs")
 
-    opt_state = optim.init(params)
     lr_state = schedule_fn.init(params)
     
     params = jax.device_put_replicated(params, devices)
@@ -118,14 +113,18 @@ def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_
             weight = final_weight + (lr - elr) / (slr - elr) * (init_weight-final_weight)
             weight = jax.device_put_replicated(weight, devices)
 
-        if out_val > 1e1 * best_loss or jnp.isnan(jnp.sum(loss_val)):
+        if out_val > 1e1 * best_loss or (not jnp.isfinite(out_train)) or (not jnp.isfinite(out_val)):
 
             step = ckpt.latest_step()
-            restored = ckpt_restore.restore(step)
+            restored = ckpt_restore.restore(step-1, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
 
             params = restored["params"]
             params = jax.device_put_replicated(params, devices)
-            ema_params = params
+            opt_state = restored["opt_state"]
+            opt_state = jax.device_put_replicated(opt_state, devices)
+            restored = ckpt_restore.restore(step, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
+            ema_params = restored["params"]
+            ema_params = jax.device_put_replicated(ema_params, devices)
          
 
         if out_val < best_loss:
@@ -134,6 +133,8 @@ def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_
             save_step = save_step + 1
             aveparams = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), params)
             ckpt_state["params"] = aveparams
+            ave_state = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), opt_state)
+            ckpt_state["opt_state"] = ave_state
             ckpt_state_cpu["params"] = jax.device_put(aveparams, jax.devices('cpu')[0])
             ckpt.save(save_step, args=oc.args.StandardSave(ckpt_state))
             ckpt_cpu.save(save_step, args=oc.args.StandardSave(ckpt_state_cpu))
@@ -157,7 +158,7 @@ def train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_
 
 key = jax.random.split(key[-1], 2)
 
-data_load = dataloader.Dataloader(full_config.maxneigh, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain)
+data_load = dataloader.Dataloader(full_config.maxneigh, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain)
 
 full_config = replace(full_config, initpot=data_load.initpot)
 with open("full_config.json", "w") as f:
@@ -289,6 +290,7 @@ schedule_fn = optax.contrib.reduce_on_plateau(factor=full_config.decay_factor, p
 
 #optim = optax.amsgrad(learning_rate=slr)
 optim = optax.chain(optax.add_decayed_weights(full_config.weight_decay), optax.clip_by_global_norm(full_config.clip_norm), optax.amsgrad(learning_rate=full_config.slr))
+opt_state = optim.init(params)
 
 ferr=open("nn.err","w")
 ferr.write("Hybrid Equivariant MPNN package based on three-body descriptors \n")
@@ -302,7 +304,7 @@ def to_cpu(x):
 cpu_config = jax.tree_util.tree_map(to_cpu, asdict(config))
 
 
-ckpt_state = {"params":params, "config": asdict(config)}
+ckpt_state = {"params":params, "config": asdict(config), "opt_state":opt_state}
 ckpt_state_cpu = {"params":jax.device_put(params, jax.devices('cpu')[0]), "config": cpu_config}
 
 
@@ -312,10 +314,11 @@ ckpt_restore = oc.CheckpointManager(full_config.ckpath, options=options)
 ema_params = params
 if full_config.restart:
     step = ckpt_restore.latest_step()
-    restored = ckpt_restore.restore(step-1)
+    restored = ckpt_restore.restore(step-1, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
     params = restored["params"]
-    restored = ckpt_restore.restore(step)
+    restored = ckpt_restore.restore(step, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
     ema_params = restored["params"]
+    opt_state = restored["opt_state"]
     ckpt_state = restored
 
 ckpt = oc.CheckpointManager(
@@ -339,7 +342,7 @@ ckpt_state_cpu["params"] = ema_params
 ckpt_cpu.save(1, args=oc.args.StandardSave(ckpt_state_cpu))
 
 
-train(params, ema_params, config, optim, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, full_config.warm_lr, full_config.slr, full_config.elr, full_config.warm_epoch, full_config.Epoch, full_config.ncyc, full_config.ntrain, nval, nprop)
+train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, full_config.warm_lr, full_config.slr, full_config.elr, full_config.warm_epoch, full_config.Epoch, full_config.ncyc, full_config.ntrain, nval, nprop)
          
 ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
 ferr.close()

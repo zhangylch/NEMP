@@ -27,7 +27,7 @@ class Neighlist():
         
     def update(self, positions, cell):
         if np.sum(np.square(cell - self.old_cell)) > 1e-5:
-            self.getneigh.init_neigh(self.r_cutoff, self.r_cutoff, cell.T, self.pbc)
+            self.getneigh.init_neigh(self.r_cutoff, self.r_cutoff, cell.T, self.pbc, 1.5)
             self.old_cell = cell
             
 

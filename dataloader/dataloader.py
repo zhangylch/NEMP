@@ -6,7 +6,7 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5):
+    def __init__(self, maxneigh, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", seed=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5):
             
         self.cutoff = cutoff
         self.capacity = capacity
@@ -16,7 +16,7 @@ class Dataloader():
         self.force_table = force_table
         self.stress_table = stress_table
         self.cross_val = cross_val
-        self.key = key
+        self.seed = seed
 
 
         if "32" in jnp_dtype:
@@ -79,7 +79,7 @@ class Dataloader():
        
  
         if Fshuffle:
-            self.shuffle_list = np.random.RandomState(seed=self.key).permutation(self.numpoint)
+            self.shuffle_list = np.random.RandomState(seed=self.seed).permutation(self.numpoint)
         else: 
             self.shuffle_list = np.arange(self.numpoint) 
 
@@ -139,13 +139,13 @@ class Dataloader():
             return coor, cell, neighlist, shiftimage, center_factor, species, abprop
         else:
             if self.cross_val:
-                self.key = self.key+1
-                self.shuffle_list = np.random.RandomState(seed=self.key).permutation(self.numpoint)
+                self.seed = self.seed+1
+                self.shuffle_list = np.random.RandomState(seed=self.seed).permutation(self.numpoint)
             else:
-                self.key = self.key+1
-                shuffle_list1 = np.random.RandomState(seed=self.key).permutation(self.shuffle_list[:self.ntrain])
+                self.seed = self.seed+1
+                shuffle_list1 = np.random.RandomState(seed=self.seed).permutation(self.shuffle_list[:self.ntrain])
                 self.shuffle_list[:self.ntrain] = shuffle_list1
-                shuffle_list1 = np.random.RandomState(seed=self.key).permutation(self.shuffle_list[self.ntrain:])
+                shuffle_list1 = np.random.RandomState(seed=self.seed).permutation(self.shuffle_list[self.ntrain:])
                 self.shuffle_list[self.ntrain:] = shuffle_list1
             raise StopIteration
 
