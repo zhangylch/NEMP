@@ -126,7 +126,6 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
            thread_start_idx = scutnum + 1
            scutnum = scutnum + local_scutnum(iatom)
            
-           ! 检查总列表是否溢出
            if (scutnum > maxneigh) then
              print *, "ERROR: Total neighbor list overflow. Increase maxneigh."
              goto 999 
@@ -136,7 +135,6 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
            shifts(:, thread_start_idx : scutnum) = local_shifts(:, 1 : local_scutnum(iatom), iatom)
          
          else if (local_scutnum(iatom) > max_neigh_peratom + 0.5) then
-           ! 处理单个原子溢出的错误
            print *, "ERROR: Per-atom neighbor list overflow for atom ", iatom
            print *, "Increase times_neigh."
            goto 999
