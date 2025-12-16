@@ -84,7 +84,10 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
    
     scale = jax.device_put_replicated(warm_lr / slr, devices)
     max_scale =  slr / warm_lr
-    weight = jax.device_put_replicated(init_weight, devices)
+    weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
+    init_weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
+    final_weight = jax.device_put_replicated(jnp.array(full_config.final_weight), devices)
+    ones_replicated = jax.device_put_replicated(jnp.array(1.0), devices)
     save_step = 0
     for iepoch in range(Epoch): 
 
@@ -107,11 +110,10 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
         print_err(iepoch, lr, out_train, out_val, ploss_out)
 
         _, lr_state = schedule_fn.update(updates=params, state=lr_state, value=out_val)
-        scale = jnp.ones(full_config.local_size) * lr_state.scale * (1.0 / max_scale + min(((iepoch+1) / warm_epoch), 1) * (1.0 - 1.0 / max_scale))
+        scale = ones_replicated * lr_state.scale * (1.0 / max_scale + min(((iepoch+1) / warm_epoch), 1) * (1.0 - 1.0 / max_scale))
 
         if iepoch > warm_epoch:
             weight = final_weight + (lr - elr) / (slr - elr) * (init_weight-final_weight)
-            weight = jax.device_put_replicated(weight, devices)
 
         if out_val > 1e1 * best_loss or (not jnp.isfinite(out_train)) or (not jnp.isfinite(out_val)):
 

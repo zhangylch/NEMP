@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import jax.random as jrm
 from jax.numpy import dtype,array
 import flax.linen as nn
+from jax.ops import segment_sum
 from typing import Sequence, List, Union, Optional
 from flax.core import freeze
 from jax.lax import fori_loop
@@ -38,7 +39,7 @@ class MPNN(nn.Module):
 
         self.contract_coeff = self.param('contract_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.nspec, 3, self.config.nwave, self.config.nwave), dtype)
 
-        self.l_coeff = self.param('l_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.nspec, self.config.num_cg, self.config.nwave), dtype)
+        self.l_coeff = self.param('l_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.num_cg, self.config.nspec, self.config.nwave), dtype)
 
         self.neighcoeffnn = MLP.MLP(num_output = self.config.npaircode, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=True, bias_init_value = jnp.ones(self.config.npaircode), cst=self.config.cst, dtype=dtype)
 
@@ -48,15 +49,9 @@ class MPNN(nn.Module):
 
         self.radialnn = MLP.MLP(num_output = (self.config.prmaxl+2) * self.config.nwave, num_blocks = self.config.radial_nl[0], features = self.config.radial_nl[1], layers_per_block = self.config.radial_nl[2], use_linear = self.config.radial_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype)
 
-        self.MPNN_list0=[MLP.MLP(num_output = self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop)]
+        self.MPNN_list=[MLP.MLP(num_output = (self.config.prmaxl + self.config.rmaxl)*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop)]
 
-        self.MPNN_list1=[MLP.MLP(num_output = self.config.rmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop)]
-
-        self.ead_list0=[MLP.MLP(num_output = self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop+1)]
-
-        self.ead_list1=[MLP.MLP(num_output = self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop+1)]
-
-        self.ead_list2=[MLP.MLP(num_output = self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop+1)]
+        self.ead_list=[MLP.MLP(num_output = 3*self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop+1)]
 
         self.outnn=MLP.MLP(num_output = 1, num_blocks = self.config.out_nl[0], features = self.config.out_nl[1], layers_per_block = self.config.out_nl[2], use_linear=self.config.out_nl[3], use_bias=self.config.use_bias, bias_init_value = None, cst=self.config.cst, dtype=dtype)
 
@@ -94,7 +89,7 @@ class MPNN(nn.Module):
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
         sph = self.sph_cal(distvec.T / distances)
-        sph_norm = jnp.zeros((rmaxl_i, sph.shape[1]), dtype=dtype).at[self.config.index_l].add(jnp.square(sph))
+        sph_norm = segment_sum(jnp.square(sph), self.config.index_l, num_segments=rmaxl_i, indices_are_sorted=True)
         sph_norm = sph_norm + eps
         sph = sph / jnp.sqrt(sph_norm[self.config.index_l]) * jnp.sqrt(dtype_2 * self.config.index_l[:, None] + dtype_1)
 
@@ -103,59 +98,55 @@ class MPNN(nn.Module):
         poly_env = dtype_1 - dist_pow * ((pn_f + dtype_1) * (pn_f + dtype_2) / dtype_2 - pn_f * (pn_f + dtype_2) * norm_dist + pn_f * (pn_f + dtype_1) / dtype_2 * norm_dist * norm_dist)
         cut_func = poly_env * poly_env * neigh_factor
 
-        ave_neigh = jnp.zeros(numatom, dtype=dtype).at[neighlist[0]].add(cut_func)
+        ave_neigh = segment_sum(cut_func, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         ave_neigh = ave_neigh[:, None] + eps
 
-        expand_spec = species[neighlist].T
-        spec_emb = jnp.less(jnp.sum(jnp.abs(expand_spec[:, None] - self.config.com_spec), axis=-1), 0.5).astype(neighlist.dtype)
-        expand_indices = jnp.argmax(spec_emb.astype(dtype), axis=1)
+        cn_indices = spec_indices[neighlist]
         pair_spec = self.neighcoeffnn(self.config.com_spec)
 
-        emb_coeff = self.neighnn(pair_spec)[expand_indices]
-        init_ead = self.rweightnn(pair_spec)[expand_indices]
+        emb_coeff = self.neighnn(pair_spec).reshape(self.config.nspec, self.config.nspec, -1)[cn_indices[0], cn_indices[1]]
+        init_ead = self.rweightnn(pair_spec).reshape(self.config.nspec, self.config.nspec, -1)[cn_indices[0], cn_indices[1]]
         smooth_ead = init_ead * cut_func[:, None]
         radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None]
         radial_func = jnp.concatenate((smooth_ead[:, nwave_i:], radial_func), axis=1)
 
         wradial = self.radialnn(radial_func).reshape(-1, prmaxl_i+2, nwave_i)
         ead = jnp.concatenate((smooth_ead[:, :nwave_i], wradial[:, -1]), axis=1)
-        density = jnp.zeros((numatom, nwave_i), dtype=dtype).at[neighlist[0]].add(wradial[:, -2])
+        density = segment_sum(wradial[:, -2], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
         pindex_l = self.config.index_l[:pnorb_i]
         worbital = jnp.einsum("ijk, ji -> ijk", wradial[:, pindex_l], sph[:pnorb_i])
-        center_orbital = jnp.zeros((numatom, pnorb_i, nwave_i), dtype=dtype).at[neighlist[0]].add(worbital)
+        center_orbital = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
 
         # --- Message Passing Loop using a standard Python for-loop ---
-        radial0 = self.ead_list0[-1](ead).reshape(-1, prmaxl_i, nwave_i)
-        radial1 = self.ead_list1[-1](ead).reshape(-1, prmaxl_i, nwave_i)
-        radial2 = self.ead_list2[-1](ead).reshape(-1, prmaxl_i, nwave_i)
+        radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
 
+
             norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f))
-            add_orb = radial0[:, pindex_l] * norm_corb[neighlist[0]] + radial1[:, pindex_l] * norm_corb[neighlist[1]]
+            add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
             norm_ead = jnp.einsum("ji, ijk -> ik", sph[:pnorb_i], add_orb) / jnp.sqrt(dtype_2)
             ead = jnp.concatenate((ead, norm_ead), axis=1)
 
-            orbital = jnp.einsum("ijk, ji -> ijk", radial2[:, pindex_l], sph[:pnorb_i])
-            sum_orb = jnp.zeros_like(center_orbital).at[neighlist[0]].add(orbital)
+            orbital = jnp.einsum("ijk, ji -> ijk", radial[:, 2, pindex_l], sph[:pnorb_i])
+            sum_orb = segment_sum(orbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
             density1 = jnp.sum(sum_orb * norm_corb, axis=1)
             density = jnp.concatenate((density, density1), axis=1)
 
-            orb_coeff0 = self.MPNN_list0[iter_loop](ead).reshape(-1, self.config.prmaxl, self.config.nwave)
-            orb_coeff1 = self.MPNN_list1[iter_loop](ead).reshape(-1, self.config.rmaxl, self.config.nwave)
+            orb_coeff = self.MPNN_list[iter_loop](ead).reshape(-1, prmaxl_i+rmaxl_i, self.config.nwave)
             contract_coeff_iter = (self.contract_coeff / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
-            l_coeff_iter = self.l_coeff[iter_loop, spec_indices]
+            l_coeff_iter = self.l_coeff[iter_loop]
 
             center_orbital = self.sum_interaction(
+                numatom = numatom,
                 prmaxl_i = prmaxl_i,
                 nwave_i = nwave_i,
                 center_orbital=center_orbital,
                 contract_coeff=contract_coeff_iter,
-                l_coeff=l_coeff_iter,
-                orb_coeff0=orb_coeff0,
-                orb_coeff1=orb_coeff1,
+                l_coeff=l_coeff_iter[:, spec_indices],
+                orb_coeff=orb_coeff,
                 neighlist=neighlist,
                 ave_neigh=ave_neigh,
                 pindex_l=pindex_l,
@@ -167,15 +158,12 @@ class MPNN(nn.Module):
                 norm_factor = jnp.sqrt(jnp.sum(jnp.square(center_orbital)) / (jnp.sum(center_factor) * pnorb_i * nwave_f))
                 center_orbital = center_orbital / norm_factor
 
-            radial0 = self.ead_list0[iter_loop](ead).reshape(-1, prmaxl_i, nwave_i)
-            radial1 = self.ead_list1[iter_loop](ead).reshape(-1, prmaxl_i, nwave_i)
-            radial2 = self.ead_list2[iter_loop](ead).reshape(-1, prmaxl_i, nwave_i)
+            radial = self.ead_list[iter_loop](ead).reshape(-1, 3, prmaxl_i, nwave_i)
         # --- End of Message Passing Loop ---
 
-        radial = radial0 + radial1 + radial2
         norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f * dtype_3))
-        orbital = jnp.einsum("ijk, ji -> ijk", radial[:, pindex_l], sph[:pnorb_i])
-        sum_orb = jnp.zeros_like(center_orbital).at[neighlist[0]].add(orbital)
+        orbital = jnp.einsum("iljk, ji -> ijk", radial[:, :, pindex_l], sph[:pnorb_i])
+        sum_orb = segment_sum(orbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)
         density = jnp.concatenate((density, density1), axis=1)
 
@@ -186,20 +174,20 @@ class MPNN(nn.Module):
         return jnp.sum(atomic_ene * center_factor) * jnp.array(self.config.std, dtype=dtype)
 
 
-    def sum_interaction(self, prmaxl_i, nwave_i, center_orbital, contract_coeff, l_coeff, orb_coeff0, orb_coeff1, neighlist, ave_neigh, pindex_l, sph, dtype_2):
+    def sum_interaction(self, numatom, prmaxl_i, nwave_i, center_orbital, contract_coeff, l_coeff, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
         corbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 0])
-        iter_orb = jnp.zeros_like(center_orbital).at[neighlist[0]].add(corbital[neighlist[1]] * orb_coeff0[:, pindex_l])
+        iter_orb = segment_sum(corbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff1[:, self.config.index_l], sph)
-        init_orb = jnp.zeros_like(worbital, shape=(center_orbital.shape[0], *worbital.shape[1:])).at[neighlist[0]].add(worbital)
+        worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i+self.config.index_l], sph)
+        init_orb = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        inter_orbital = jnp.einsum("ikj, ikj, k -> ikj", init_orb[:, self.config.index_i1], iter_orb[:, self.config.index_i2], self.config.ens_cg)
+        inter_orbital = jnp.einsum("ikj, ikj, k -> kij", init_orb[:, self.config.index_i1], iter_orb[:, self.config.index_i2], self.config.ens_cg)
 
-        mp_orbital = jnp.zeros((center_orbital.shape[0], self.config.index_add.shape[0], nwave_i), dtype=center_orbital.dtype).at[:, self.config.index_den].add(inter_orbital)
+        mp_orbital = segment_sum(inter_orbital, self.config.index_den, num_segments=self.config.index_add.shape[0], indices_are_sorted=True)
 
-        iter_orb = jnp.zeros_like(center_orbital).at[:, self.config.index_add].add(mp_orbital * l_coeff[:, self.config.index_squ])
+        iter_orb = segment_sum(mp_orbital*l_coeff[self.config.index_squ], self.config.index_add, num_segments=prmaxl_i * prmaxl_i)
         norm = ave_neigh * ave_neigh * jnp.sqrt(self.config.count_l[pindex_l])
-        iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
+        iter_orb = jnp.einsum("ij, jik, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
 
         center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 2])
 

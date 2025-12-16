@@ -148,7 +148,7 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
        deallocate(local_shifts)
        deallocate(index_numrs)
        deallocate(index_rs)
-       atomindex(:,scutnum+1:maxneigh)=0
+       atomindex(:,scutnum+1:maxneigh)=numatom-1
        shifts(:, scutnum+1:maxneigh)=0.0
      return
 end subroutine get_neigh

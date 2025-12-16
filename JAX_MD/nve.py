@@ -17,7 +17,7 @@ from src.read_json import load_config
 from ASE.nemp.convert_type import convert_dtype
 import model.MPNN as MPNN
 import JAX_MD.build_neigh as build_neigh
-import fortran.getneigh as getneigh
+import fortran.jax_0_7_1.getneigh as getneigh
 
 from ase import Atoms
 from ase.io import extxyz
@@ -37,21 +37,21 @@ def stop_grad(variables):
 #give the parameters
 skin = 1.0
 temperature = 0.025 # in the unit of energy of your ML 
-maxneigh = 7300  
-skin_neigh = 7000 
-steps_per_block = 10  # step for update the neighlist
-total_blocks = 500  # step_per_block * total_block will the total number of MD step
+maxneigh = 7500 * 64
+skin_neigh = 6500 * 64
+steps_per_block = 20  # step for update the neighlist
+total_blocks = 1000  # step_per_block * total_block will the total number of MD step
 # system setting
 ev_kt=11604.568449040902
 time_fs = 10.180507
 target_temp = 300.0  # kelvin
 print_traj = True
-time_step_fs = 0.2 # fs
-print_step = 2 # fs
+time_step_fs = 0.05 # fs
+print_step = 200 # fs
 logfile = open("md.log", 'w')
 trajfile = open("traj.extxyz", 'w')
-thermo_time = 1  # fs
-tau = 100
+thermo_time = 20000  # fs
+tau = 400
 
 
 #convert to eV
@@ -80,10 +80,10 @@ else:
     jnp_dtype = jnp.float64
 
 
-fileobj=open("h2o.extxyz",'r')
+fileobj=open("water.xyz",'r')
 configuration = extxyz.read_extxyz(fileobj,index=slice(0,1))
 atoms = next(configuration)
-#atoms = atoms.repeat((2, 2, 2))
+atoms = atoms.repeat((4, 4, 4))
 
 key = random.PRNGKey(0)
 
@@ -123,16 +123,14 @@ neighlist = neigh_fn.update(positions, cell)
 positions_gpu = jnp.array(positions.astype(float_dtype))
 neighlist = jnp.array(neighlist)
 
-def energy_fn(positions, cell, neighlist):
+def energy_fn(positions, neighlist=neighlist):
     cut_neighlist, cut_shifts = neigh_fn.cut_neigh(positions, cell_gpu, neighlist)
-    return model.apply(params, positions, cell, disp_cell, jax.lax.stop_gradient(cut_neighlist), jax.lax.stop_gradient(cut_shifts), center_factor, species)
-
-#jit_energy_fn = jax.jit(energy_fn)
+    return model.apply(params, positions, cell_gpu, disp_cell, jax.lax.stop_gradient(cut_neighlist), jax.lax.stop_gradient(cut_shifts), center_factor, species)
 
 init_fn, apply_fn = simulate.nve(energy_fn, shift_fn, time_step)
 
+state = init_fn(key, positions_gpu, target_temp, mass=masses)
 
-state = init_fn(key, positions_gpu, temperature, mass=masses, cell=cell_gpu, neighlist=neighlist)
 # for npt and cell opt another box in state are required
 #state = init_fn(key, positions, temperature, cell=cell_gpu, neighlist=cut_neighlist, mass=masses, box=cell)
 
@@ -140,7 +138,7 @@ state = init_fn(key, positions_gpu, temperature, mass=masses, cell=cell_gpu, nei
 def simulation_step(i, carry):
     state, neighlist = carry
 
-    state = apply_fn(state, cell=cell_gpu, neighlist=neighlist)
+    state = apply_fn(state, neighlist=neighlist)
 
     return state, neighlist
 
@@ -162,7 +160,7 @@ def cpu_worker():
             break
 
         positions_cpu, step, temp = jax.device_get(data)
-        if np.mod(step, print_step) < 1.0 and step > thermo_step:
+        if np.mod(step, print_step) < 0.5 and step > thermo_step:
             logfile.write("time = {:10.3f}, temperature = {:7.2f} K \n".format(step * time_step_fs/1000.0, temp * ev_kt * 2.0 / (3.0 * positions_cpu.shape[0])))
             atoms.positions = positions_cpu
             extxyz.write_extxyz(trajfile, atoms)
@@ -197,7 +195,7 @@ end_time = time.time()
 position_queue.put(None)
 worker_thread.join()
 
-total_duration = start_time - end_time
+total_duration = (start_time - end_time) / (total_blocks * steps_per_block)
 print("\n--- Simulation Finished ---")
 print(f"Total time for {total_blocks * steps_per_block} steps: {total_duration:.4f} seconds.")
 logfile.close()

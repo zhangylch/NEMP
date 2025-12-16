@@ -75,7 +75,8 @@ class Dataloader():
         self.nspec = reduce_spec.shape[0]
         self.reduce_spec = jnp.array(reduce_spec.astype(self.int_dtype))
         x, y = jnp.meshgrid(self.reduce_spec, self.reduce_spec)
-        self.com_spec = jnp.array(jnp.stack([x.ravel(), y.ravel()], axis=1).astype(self.float_dtype))
+        self.com_spec = jnp.array(jnp.stack([y.ravel(), x.ravel()], axis=1).astype(self.float_dtype))
+        print(self.com_spec)
        
  
         if Fshuffle:
