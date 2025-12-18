@@ -3,7 +3,7 @@
 import sys
 import math
 import numpy as np
-import model.MPNN as MPNN
+import train_model.MPNN as MPNN
 from src.params import *
 import dataloader.dataloader as dataloader
 import dataloader.cudaloader as cudaloader
@@ -28,21 +28,21 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
         def optimize_epoch(params, opt_state, ema_params, scale, loss_out, weight, data):
 
             def body(i, carry):
-                params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_fn = carry
+                params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn = carry
                 inabprop = (iabprop[i] for iabprop in abprop)
-                loss, grads = value_and_grad_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], shiftimage[i], center_factor[i], species[i], inabprop, weight)
+                loss, grads = value_and_grad_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], celllist[i], shiftimage[i], center_factor[i], species[i], numatoms[i], inabprop, weight)
                 grads = jax.lax.pmean(grads, axis_name="train_GPUs")
                 updates, opt_state = optim.update(grads, opt_state, params)
                 updates = otu.tree_scalar_mul(scale, updates)
                 params = optax.apply_updates(params, updates)
                 ema_params = optax.incremental_update(params, ema_params, 0.001)
                 loss_fn += loss
-                return params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_fn
+                return params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn
             
-            coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
+            coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
             disp_cell = jnp.zeros_like(cell)
-            params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out = \
-            jax.lax.fori_loop(0, nstep, body, (params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out))
+            params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out = \
+            jax.lax.fori_loop(0, nstep, body, (params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out))
             return params, opt_state, ema_params, loss_out
 
         return optimize_epoch
@@ -52,17 +52,17 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
     def val_loop(nstep):
         def get_loss(params, scale, loss_out, ploss_out, weight, data):
             def body(i, carry):
-                params, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_fn, ploss_fn = carry
+                params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, nuamtoms, abprop, loss_fn, ploss_fn = carry
                 inabprop = (iabprop[i] for iabprop in abprop)
-                loss, ploss = value_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], shiftimage[i], center_factor[i], species[i], inabprop, weight)
+                loss, ploss = value_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], celllist[i], shiftimage[i], center_factor[i], species[i], numatoms[i], inabprop, weight)
                 loss_fn = loss_fn + loss
                 ploss_fn = ploss_fn + ploss
-                return params, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_fn, ploss_fn
+                return params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn, ploss_fn
 
-            coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
+            coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
             disp_cell = jnp.zeros_like(cell)
-            params, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out, ploss_out = \
-            jax.lax.fori_loop(0, nstep, body, (params, weight, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, loss_out, ploss_out))
+            params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out, ploss_out = \
+            jax.lax.fori_loop(0, nstep, body, (params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out, ploss_out))
             return loss_out, ploss_out
         return get_loss
 
@@ -160,7 +160,7 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
 
 key = jax.random.split(key[-1], 2)
 
-data_load = dataloader.Dataloader(full_config.maxneigh, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain, node_cap = full_config.node_cap)
 
 full_config = replace(full_config, initpot=data_load.initpot)
 with open("full_config.json", "w") as f:
@@ -191,9 +191,9 @@ for data in data_load:
 
 get_gpu0_data_op = lambda sharded_array: sharded_array[0]
 data_on_gpu0_pytree = jax.tree.map(get_gpu0_data_op, data)
-coor, cell, neighlist, shiftimage, center_factor, species, abprop = data_on_gpu0_pytree
+coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data_on_gpu0_pytree
 
-initdata = (coor[0, 0], cell[0, 0], jnp.zeros((3,3)), neighlist[0, 0], shiftimage[0, 0], center_factor[0, 0], species[0, 0])
+initdata = (coor[0], cell[0], jnp.zeros_like(cell[0]), neighlist[0], celllist[0], shiftimage[0], center_factor[0], species[0])
 
 #=================================================Equi MPNN===================================================================
 config = ModelConfig(nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
@@ -212,80 +212,78 @@ print_params(params)
 
 
 if full_config.stress_table:
-    def get_force_stress(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-        ene, (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
-        volume = jnp.dot(cell[0], jnp.cross(cell[1], cell[2]))
-        return ene, force, stress/volume*jnp.array(full_config.stress_sign)
-    vmap_model = vmap(get_force_stress, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        (_, ene), (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        volume = jnp.dot(cell[:, 0], jnp.cross(cell[:, 1], cell[:, 2]))
+        return ene, force, stress/volume[:, None, None]*jnp.array(full_config.stress_sign)
 elif full_config.force_table:
-    vmap_model = vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        (_, ene), force = jax.value_and_grad(model.apply, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        return ene, force
 else:
-    def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-        return model.apply(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
-    vmap_model = vmap(get_energy, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        _, ene = model.apply(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        return ene,
 
-def make_gradient(pes_model):
+def make_gradient(energy_model):
 
-    def wf_loss(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, weight):
+    def wf_loss(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, weight):
 
-        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
-        #coor = jnp.matmul(coor, rotate) 
-        #nnprop1 = pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
-        #jax.debug.print("target {x} {y}", x=nnprop1[0], y=nnprop[0])
+        nnprop = energy_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
-            loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1))) \
-                 + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (3 * jnp.sum(center_factor, axis=1)[:, None, None])) \
+            loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / numatoms)) \
+                 + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) \
                  + weight[2] * jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
         elif full_config.force_table:
             abpot, abforce = abprop
             nnpot, nnforce = nnprop
-            loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1))) \
-                 + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (3 * jnp.sum(center_factor, axis=1)[:, None, None]))
+            loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / numatoms)) \
+                 + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None])
         else:
             abpot, = abprop
             nnpot, = nnprop
-            loss = jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1))) * weight[0]
+            loss = jnp.sum(jnp.square((abpot - nnpot) / numatoms)) * weight[0]
         
         return loss
 
 
     return jax.value_and_grad(wf_loss)
         
-value_and_grad_fn = make_gradient(vmap_model)
+value_and_grad_fn = make_gradient(pes_model)
 
 def make_loss(pes_model, nprop):
 
-    def get_loss(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, weight):
+    def get_loss(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, weight):
 
-        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
-            loss1 = jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1))) 
-            loss2 = jnp.sum(jnp.square(abforce - nnforce) / (3 * jnp.sum(center_factor, axis=1)[:, None, None])) 
+            loss1 = jnp.sum(jnp.square((abpot - nnpot) / numatoms)) 
+            loss2 = jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) 
             loss3 = jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
             ploss = jnp.stack([loss1, loss2, loss3])
             loss = loss1*weight[0] + loss2*weight[1] + loss3*weight[2]
         elif full_config.force_table:
             abpot, abforce = abprop
             nnpot, nnforce = nnprop
-            loss1 = jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1))) 
-            loss2 = jnp.sum(jnp.square(abforce - nnforce) / (3 * jnp.sum(center_factor, axis=1)[:, None, None]))
+            loss1 = jnp.sum(jnp.square((abpot - nnpot) / numatoms)) 
+            loss2 = jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None])
             ploss = jnp.stack([loss1, loss2])
             loss = loss1*weight[0] + loss2*weight[1]
         else:
             abpot, = abprop
             nnpot, = nnprop
-            ploss = jnp.sum(jnp.square((abpot - nnpot) / jnp.sum(center_factor, axis=1)))
+            ploss = jnp.sum(jnp.square((abpot - nnpot) / numatoms))
             loss = ploss * weight[0]
         return loss, ploss
 
 
     return get_loss
  
-value_fn = make_loss(vmap_model, nprop)       
+value_fn = make_loss(pes_model, nprop)       
 
 
 schedule_fn = optax.contrib.reduce_on_plateau(factor=full_config.decay_factor, patience=full_config.patience_step, cooldown=full_config.cooldown, min_scale=full_config.elr/full_config.slr)

@@ -6,7 +6,7 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", seed=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5):
+    def __init__(self, maxneigh_per_node, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", seed=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5, node_cap=1.0):
             
         self.cutoff = cutoff
         self.capacity = capacity
@@ -17,6 +17,7 @@ class Dataloader():
         self.stress_table = stress_table
         self.cross_val = cross_val
         self.seed = seed
+        self.maxneigh_per_node = maxneigh_per_node
 
 
         if "32" in jnp_dtype:
@@ -30,12 +31,10 @@ class Dataloader():
         read_xyz.read_xyz(datafolder, force_table=force_table, stress_table=stress_table)
         
         numatoms = np.array(numatoms)
+        ave_node = np.mean(numatoms)
+        self.batchnode = int(node_cap * ave_node * batchsize)
         self.numpoint = numatoms.shape[0]
         pot = np.array(pot)
-        f1 = open("energy.txt", 'w')
-        for ipot in pot:
-            f1.write("{} \n".format(ipot))
-        f1.close()
         
         if ene_shift:
             if not eval_mode:
@@ -45,14 +44,13 @@ class Dataloader():
             pot = pot - initpot
 
         self.initpot = initpot
-        self.numatoms = np.array(numatoms)
+        self.numatoms = np.array(numatoms).astype(self.int_dtype)
         self.pbc = np.array(pbc)
         self.coordinates = coordinates
         self.maxnumatom = np.max(self.numatoms)
-        self.maxneigh = maxneigh * self.maxnumatom
+        self.maxneigh = maxneigh_per_node * self.batchnode
         cell = np.array(cell)
         expand_species = np.ones((self.numpoint, self.maxnumatom), dtype=self.int_dtype)
-        center_factor = np.ones((self.numpoint, self.maxnumatom))
 
         if force_table:
             force = np.zeros((self.numpoint, self.maxnumatom, 3))
@@ -63,10 +61,9 @@ class Dataloader():
             expand_species[i, self.numatoms[i]:] = expand_species[i, 0]
             if force_table:
                 force[i, 0:self.numatoms[i]] = -force_list[i]
-            center_factor[i, self.numatoms[i]:] = 0.0
         
         if force_table:
-            self.std = jnp.sqrt(jnp.sum(jnp.square(force)) / (3*jnp.sum(self.numatoms)))
+            self.std = np.sqrt(np.sum(np.square(force)) / (3*np.sum(self.numatoms)))
         else:
             self.std = 1.0
  
@@ -76,7 +73,6 @@ class Dataloader():
         self.reduce_spec = jnp.array(reduce_spec.astype(self.int_dtype))
         x, y = jnp.meshgrid(self.reduce_spec, self.reduce_spec)
         self.com_spec = jnp.array(jnp.stack([y.ravel(), x.ravel()], axis=1).astype(self.float_dtype))
-        print(self.com_spec)
        
  
         if Fshuffle:
@@ -84,13 +80,13 @@ class Dataloader():
         else: 
             self.shuffle_list = np.arange(self.numpoint) 
 
-        self.length = int(self.numpoint / self.batchsize)
-        self.train_length = int(ntrain / self.batchsize)
+        self.size_per_step = self.batchsize * ncyc * local_size
+        self.length = int(self.numpoint / self.size_per_step)
+        self.train_length = int(ntrain / self.size_per_step)
         self.ntrain = ntrain
-        self.nval = int((self.numpoint - self.ntrain) / self.batchsize) * self.batchsize
+        self.nval = int((self.numpoint - self.ntrain) / self.size_per_step) * self.size_per_step
 
         self.species = expand_species
-        self.center_factor = center_factor.astype(self.int_dtype)
         if force_table: self.force = force.astype(self.float_dtype)
         if stress_table: self.stress = np.array(stress).astype(self.float_dtype)
         self.cell = cell
@@ -104,40 +100,60 @@ class Dataloader():
         return self
 
     def __next__(self):
-        uppoint = self.ipoint + self.batchsize
+        uppoint = self.ipoint + self.size_per_step
         if uppoint < self.numpoint + 0.5:
-            index_batch = self.shuffle_list[self.ipoint:uppoint]
-            coor = np.zeros((self.batchsize, self.maxnumatom, 3))
-            neighlist = np.ones((self.batchsize, 2, self.maxneigh), dtype=np.int32)
-            shiftimage = np.zeros((self.batchsize, 3, self.maxneigh))
-            for inum in range(self.batchsize):
-                i = index_batch[inum]
-                icell = self.cell[i].T
-                icart = self.coordinates[i]
-                ipbc = self.pbc[i]
-                getneigh.init_neigh(self.cutoff, self.cutoff, icell, ipbc, self.capacity)
-                cart, tmp, tmp1, scutnum = getneigh.get_neigh(icart, np.int32(self.maxneigh))
-                coor[inum, :self.numatoms[i]] = cart.T
-                neighlist[inum] = tmp
-                shiftimage[inum] = tmp1
+            coor = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
+            if self.force_table: force = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
+            species = np.zeros((self.local_size, self.ncyc, self.batchnode))
+            center_factor = np.ones((self.local_size, self.ncyc, self.batchnode))
+            neighlist = np.ones((self.local_size, self.ncyc, 2, self.maxneigh), dtype=np.int32)
+            celllist = np.ones((self.local_size, self.ncyc, self.batchnode), dtype=np.int32)
+            shiftimage = np.zeros((self.local_size, self.ncyc, 3, self.maxneigh))
+            cell = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
+            stress = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
+            pot = np.zeros((self.local_size, self.ncyc, self.batchsize))
+            numatoms = np.ones((self.local_size, self.ncyc, self.batchsize))
+            for igpu in range(self.local_size):
+                for icyc in range(self.ncyc):
+                    inode = 0
+                    ineigh = 0
+                    ibatch = 0
+                    while True:
+                        if  ibatch > self.batchsize-0.5: break
+                        inum = self.shuffle_list[self.ipoint]
+                        numatom = self.numatoms[inum]
+                        if inode + numatom > self.batchnode + 0.5: break
+                        icell = self.cell[inum].T
+                        icart = self.coordinates[inum]
+                        ipbc = self.pbc[inum]
+                        getneigh.init_neigh(self.cutoff, self.cutoff, icell, ipbc, self.capacity)
+                        cart, tmp, tmp1, scutnum = getneigh.get_neigh(icart, np.int32(self.maxneigh_per_node * numatom))
+                        coor[igpu, icyc, inode:inode+numatom] = cart.T
+                        if self.force_table: force[igpu, icyc, inode:inode+numatom] = self.force[inum, :numatom]
+                        if self.stress_table: stress[igpu, icyc, ibatch] = self.stress[inum]
+                        species[igpu, icyc, inode:inode+numatom] = self.species[inum, :numatom]
+                        cell[igpu, icyc, ibatch] = self.cell[inum]
+                        celllist[igpu, icyc, inode:inode+numatom] = ibatch
+                        neighlist[igpu, icyc, :, ineigh:ineigh+scutnum] = tmp[:, :scutnum] + inode
+                        shiftimage[igpu, icyc, :, ineigh:ineigh+scutnum] = tmp1[:, :scutnum]
+                        pot[igpu, icyc, ibatch] = self.pot[inum]
+                        numatoms[igpu, icyc, ibatch] = numatom
 
-            species = self.species[index_batch].reshape(self.local_size, self.ncyc, -1, self.maxnumatom)
-            center_factor = self.center_factor[index_batch].reshape(self.local_size, self.ncyc, -1, self.maxnumatom)
-            cell = self.cell[index_batch].reshape(self.local_size, self.ncyc, -1, 3, 3).astype(self.float_dtype)
-            shiftimage = shiftimage.transpose((0, 2, 1)).reshape(self.local_size, self.ncyc, -1, self.maxneigh, 3).astype(self.float_dtype)
-            coor = coor.reshape(self.local_size, self.ncyc, -1, self.maxnumatom, 3).astype(self.float_dtype)
-            neighlist = neighlist.reshape(self.local_size, self.ncyc, -1, 2, self.maxneigh).astype(self.int_dtype)
-            pot = self.pot[index_batch].reshape(self.local_size, self.ncyc, -1)
+                        self.ipoint +=1
+                        inode += numatom
+                        ibatch +=1
+                        ineigh += scutnum
+                    center_factor[igpu, icyc, inode:] = np.array(0.0, dtype = self.float_dtype)
+                    neighlist[igpu, icyc, :, ineigh:] = inode-1
+                    celllist[igpu, icyc, inode:] = ibatch-1
+
             abprop = (pot,)
             if self.force_table:
-                force = self.force[index_batch].reshape(self.local_size, self.ncyc, -1, self.maxnumatom, 3)
                 abprop = abprop + (force,)
             if self.stress_table:
-                stress = self.stress[index_batch].reshape(self.local_size, self.ncyc, -1, 3, 3)
                 abprop = abprop + (stress,)
              
-            self.ipoint = uppoint
-            return coor, cell, neighlist, shiftimage, center_factor, species, abprop
+            return coor.astype(self.float_dtype), cell.astype(self.float_dtype), neighlist.astype(self.int_dtype), celllist.astype(self.int_dtype), shiftimage.astype(self.float_dtype), center_factor.astype(self.float_dtype), species.astype(self.float_dtype), numatoms, abprop
         else:
             if self.cross_val:
                 self.seed = self.seed+1
