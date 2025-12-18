@@ -122,7 +122,7 @@ class Dataloader():
                         if  ibatch > self.batchsize-0.5: break
                         inum = self.shuffle_list[self.ipoint]
                         numatom = self.numatoms[inum]
-                        if inode + numatom > self.batchnode + 0.5: break
+                        if ineigh + self.maxneigh_per_node * numatom > self.maxneigh + 0.5: break
                         icell = self.cell[inum].T
                         icart = self.coordinates[inum]
                         ipbc = self.pbc[inum]

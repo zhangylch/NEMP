@@ -214,7 +214,7 @@ print_params(params)
 if full_config.stress_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
         (_, ene), (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
-        volume = jnp.dot(cell[:, 0], jnp.cross(cell[:, 1], cell[:, 2]))
+        volume = jnp.sum(cell[:, 0] * jnp.cross(cell[:, 1], cell[:, 2]), axis=-1)
         return ene, force, stress/volume[:, None, None]*jnp.array(full_config.stress_sign)
 elif full_config.force_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
