@@ -8,7 +8,7 @@ import dataloader_eval.cudaloader as cudaloader
 import jax
 from jax import vmap, jit
 import jax.numpy as jnp
-import orbax.checkpoint as oc
+from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from src.data_config import ModelConfig
 from src.read_json import load_config
 
@@ -20,7 +20,7 @@ if full_config.jnp_dtype=='float64':
 if full_config.jnp_dtype=='float32':
     jax.config.update("jax_default_matmul_precision", "highest")
 
-data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.seed, ntrain=full_config.ntrain, eval_mode=True)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.data_seed, ntrain=full_config.ntrain, eval_mode=True)
 # generate random data for initialization
 
 #ntrain = data_load.ntrain
@@ -38,18 +38,20 @@ if full_config.force_table:
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
 
 
+devices = jax.local_devices()
+restored = restore_checkpoint(
+    full_config.ckpath, 
+    devices
+)
+
+if restored is not None:
+    start_step, params, ema_params, opt_state, model_config = restored
+
 #==============================Equi MPNN==============================================================
-options = oc.CheckpointManagerOptions()
-ckpt = oc.CheckpointManager(full_config.ckpath, options=options)
-step = ckpt.latest_step()
-restored = ckpt.restore(step)
-params = restored["params"]
-model_config = restored["config"]
 
 config = ModelConfig(**model_config)
-
 model = MPNN.MPNN(config)
-#=================
+
 
 
 if full_config.force_table:

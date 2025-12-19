@@ -8,7 +8,7 @@ import dataloader_eval.cudaloader as cudaloader
 import jax
 from jax import vmap, jit
 import jax.numpy as jnp
-import orbax.checkpoint as oc
+from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from src.data_config import ModelConfig
 from src.read_json import load_config
 
@@ -37,18 +37,19 @@ if full_config.force_table:
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
 
 
-#==============================Equi MPNN==============================================================
-options = oc.CheckpointManagerOptions()
-ckpt = oc.CheckpointManager(full_config.ckpath, options=options)
-step = ckpt.latest_step()
-restored = ckpt.restore(step)
-params = restored["params"]
-model_config = restored["config"]
+devices = jax.local_devices()
+restored = restore_checkpoint(
+    full_config.ckpath, 
+    devices
+)
 
+if restored is not None:
+    start_step, params, ema_params, opt_state, model_config = restored
+
+#==============================Equi MPNN==============================================================
 config = ModelConfig(**model_config)
 
 model = MPNN.MPNN(config)
-#=================
 
 
 if full_config.force_table:
@@ -95,9 +96,8 @@ ploss_val = jnp.zeros(nprop)
 for data in data_load:
     coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
     ploss_val = val_ens(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
-    print(ploss_val)
-ploss_val = jnp.sqrt(ploss_val / prop_length)
 
+ploss_val = jnp.sqrt(ploss_val / prop_length)
 print(ploss_val)
 
 

@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
-
+import os
 import sys
+import pickle
 import math
 import numpy as np
 import train_model.MPNN as MPNN
@@ -10,18 +11,18 @@ import dataloader.cudaloader as cudaloader
 import src.print_info as print_info
 import optax
 from src.print_params import print_params
+from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from jax import vmap, jit
 from optax import tree_utils as otu
 from src.data_config import ModelConfig
 from dataclasses import replace, asdict
 import json
-import orbax.checkpoint as oc
 from typing import Optional, Any
 
 
 
 # train function
-def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop):
+def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop, start_step):
 
     def train_loop(nstep):
 
@@ -70,13 +71,6 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
     train_ens = jax.pmap(train_loop(ncyc), axis_name="train_GPUs")
     val_ens = jax.pmap(val_loop(ncyc), axis_name="val_GPUs")
 
-    lr_state = schedule_fn.init(params)
-    
-    params = jax.device_put_replicated(params, devices)
-    opt_state = jax.device_put_replicated(opt_state, devices)
- 
-    ema_params = jax.device_put_replicated(ema_params, devices)
-    
     print_err = print_info.Print_Info(ferr)
 
     best_loss = jnp.sum(jnp.array([1e20]))
@@ -88,7 +82,6 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
     init_weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
     final_weight = jax.device_put_replicated(jnp.array(full_config.final_weight), devices)
     ones_replicated = jax.device_put_replicated(jnp.array(1.0), devices)
-    save_step = 0
     for iepoch in range(Epoch): 
 
         loss_train = jnp.zeros(full_config.local_size)
@@ -117,42 +110,40 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
 
         if out_val > 1e1 * best_loss or (not jnp.isfinite(out_train)) or (not jnp.isfinite(out_val)):
 
-            step = ckpt.latest_step()
-            restored = ckpt_restore.restore(step-1, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
-
-            params = restored["params"]
-            params = jax.device_put_replicated(params, devices)
-            opt_state = restored["opt_state"]
-            opt_state = jax.device_put_replicated(opt_state, devices)
-            restored = ckpt_restore.restore(step, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
-            ema_params = restored["params"]
-            ema_params = jax.device_put_replicated(ema_params, devices)
-         
+            restored = restore_checkpoint(
+                full_config.ckpath, 
+                devices
+            )
+            
+            if restored is not None:
+                start_step, params, ema_params, opt_state, _ = restored
+                params = jax.device_put_replicated(params, devices)
+                ema_params = jax.device_put_replicated(ema_params, devices)
+                opt_state = jax.device_put_replicated(opt_state, devices)
+    
 
         if out_val < best_loss:
             best_loss = out_val
              
-            save_step = save_step + 1
+            start_step = start_step + 1
             aveparams = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), params)
-            ckpt_state["params"] = aveparams
-            ave_state = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), opt_state)
-            ckpt_state["opt_state"] = ave_state
-            ckpt_state_cpu["params"] = jax.device_put(aveparams, jax.devices('cpu')[0])
-            ckpt.save(save_step, args=oc.args.StandardSave(ckpt_state))
-            ckpt_cpu.save(save_step, args=oc.args.StandardSave(ckpt_state_cpu))
+            ave_ema_params = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), ema_params)
+            ave_opt_state = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), opt_state)
+            save_checkpoint(
+                step=start_step, 
+                params=aveparams, 
+                ema_params=ave_ema_params, 
+                opt_state=ave_opt_state, 
+                config=config, 
+                ckpt_dir=full_config.ckpath,
+                max_to_keep=5  # <--- 只保留最近 5 个，自动删除更早的
+            )
 
-            save_step = save_step + 1
-            aveparams = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), ema_params)
-            ckpt_state["params"] = aveparams
-            ckpt_state_cpu["params"] = jax.device_put(aveparams, jax.devices('cpu')[0])
-            ckpt.save(save_step, args=oc.args.StandardSave(ckpt_state))
-            ckpt_cpu.save(save_step, args=oc.args.StandardSave(ckpt_state_cpu))
-            print(f"Step {save_step}: Saved checkpoint")
+            print(f"Step {start_step}: Saved checkpoint")
 
             
 
         if lr < elr+1e-10: 
-            ckpt.close()
             break
         sys.stdout.flush()
 
@@ -290,7 +281,10 @@ schedule_fn = optax.contrib.reduce_on_plateau(factor=full_config.decay_factor, p
 
 #optim = optax.amsgrad(learning_rate=slr)
 optim = optax.chain(optax.add_decayed_weights(full_config.weight_decay), optax.clip_by_global_norm(full_config.clip_norm), optax.amsgrad(learning_rate=full_config.slr))
+
 opt_state = optim.init(params)
+lr_state = schedule_fn.init(params)
+    
 
 ferr=open("nn.err","w")
 ferr.write("Hybrid Equivariant MPNN package based on three-body descriptors \n")
@@ -301,48 +295,23 @@ def to_cpu(x):
         return jax.device_put(x, jax.devices("cpu")[0])
     return x
                                     
-cpu_config = jax.tree_util.tree_map(to_cpu, asdict(config))
-
-
-ckpt_state = {"params":params, "config": asdict(config), "opt_state":opt_state}
-ckpt_state_cpu = {"params":jax.device_put(params, jax.devices('cpu')[0]), "config": cpu_config}
-
-
-options = oc.CheckpointManagerOptions(max_to_keep=2, create=True)
-ckpt_restore = oc.CheckpointManager(full_config.ckpath, options=options)
-
+start_step = 0
+devices = jax.local_devices()
+params = jax.device_put_replicated(params, devices)
 ema_params = params
+opt_state = jax.device_put_replicated(opt_state, devices)
 if full_config.restart:
-    step = ckpt_restore.latest_step()
-    restored = ckpt_restore.restore(step-1, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
-    params = restored["params"]
-    restored = ckpt_restore.restore(step, args=oc.args.StandardRestore(item=ckpt_state, strict=False))
-    ema_params = restored["params"]
-    opt_state = restored["opt_state"]
-    ckpt_state = restored
-
-ckpt = oc.CheckpointManager(
-  oc.test_utils.erase_and_create_empty(full_config.ckpath),
-  options=options,
-)
-
-ckpt_cpu = oc.CheckpointManager(
-  oc.test_utils.erase_and_create_empty(full_config.ckpath_cpu),
-  options=options,
-)
-
-ckpt_state["params"] = params
-ckpt.save(0, args=oc.args.StandardSave(ckpt_state))
-ckpt_state["params"] = ema_params
-ckpt.save(1, args=oc.args.StandardSave(ckpt_state))
-
-ckpt_state_cpu["params"] = params
-ckpt_cpu.save(0, args=oc.args.StandardSave(ckpt_state_cpu))
-ckpt_state_cpu["params"] = ema_params
-ckpt_cpu.save(1, args=oc.args.StandardSave(ckpt_state_cpu))
+    restored = restore_checkpoint(
+        full_config.ckpath, 
+        devices
+    )
+    
+    if restored is not None:
+        start_step, params, ema_params, opt_state, _ = restored
+    
 
 
-train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_restore, ckpt_state, ckpt_state_cpu, schedule_fn, value_and_grad_fn, value_fn, data_load, full_config.warm_lr, full_config.slr, full_config.elr, full_config.warm_epoch, full_config.Epoch, full_config.ncyc, full_config.ntrain, nval, nprop)
+train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, value_and_grad_fn, value_fn, data_load, full_config.warm_lr, full_config.slr, full_config.elr, full_config.warm_epoch, full_config.Epoch, full_config.ncyc, full_config.ntrain, nval, nprop, start_step)
          
 ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
 ferr.close()
