@@ -6,7 +6,7 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh, batchsize, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=False, ntrain=10,  capacity=1.5):
+    def __init__(self, maxneigh_per_node, batchsize, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", key=0, eval_mode=False, Fshuffle=False, ntrain=10,  capacity=1.5):
             
         self.cutoff = cutoff
         self.capacity = capacity
@@ -48,7 +48,7 @@ class Dataloader():
         self.pbc = np.array(pbc)
         self.coordinates = coordinates
         self.maxnumatom = np.max(self.numatoms)
-        self.maxneigh = maxneigh * self.maxnumatom
+        self.maxneigh = maxneigh_per_node * self.maxnumatom
         cell = np.array(cell)
         expand_species = np.ones((self.numpoint, self.maxnumatom), dtype=self.int_dtype)
         center_factor = np.ones((self.numpoint, self.maxnumatom))

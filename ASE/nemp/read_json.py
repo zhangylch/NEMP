@@ -46,12 +46,14 @@ class JsonConfig:
     weight_decay: float = field(default=1e-9)
     
     cutoff: float = field(default=5.0)
+    node_cap: float = field(default=1.0)
+    edge_cap: float = field(default=1.0)
     npaircode: int = field(default=32)
     max_l: int = field(default=3)
     pmax_l: int = field(default=2)
     nwave: int = field(default=64)
     nradial: int = field(default=64)
-    maxneigh: int = field(default=26)
+    maxneigh_per_node: int = field(default=26)
     MP_loop: int = field(default=3)
     
     emb_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])

@@ -74,7 +74,7 @@ class NEMP(Calculator):
         self.old_positions = initatoms.get_positions()
         self.properties = properties
         self.cut_neigh = self._cut_neigh()
-        self.maxneigh = int(full_config.maxneigh * self.old_positions.shape[0])
+        self.maxneigh = int(full_config.maxneigh_per_node * self.old_positions.shape[0])
         self.ghostneigh = skin_neigh + self.maxneigh
 
         # load params 
