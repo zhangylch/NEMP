@@ -6,7 +6,7 @@ import fortran.getneigh as getneigh
 
 
 class Dataloader():
-    def __init__(self, maxneigh_per_node, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", seed=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5, node_cap=1.0):
+    def __init__(self, maxneigh_per_node, batchsize, local_size=1, ncyc=5, initpot=0.0, cutoff=5.0, datafolder="./", ene_shift=True, force_table=True, stress_table=False, cross_val=True, jnp_dtype="float32", seed=0, eval_mode=False, Fshuffle=True, ntrain=10,  capacity=1.5, node_cap=1.0, edge_cap=1.0):
             
         self.cutoff = cutoff
         self.capacity = capacity
@@ -48,7 +48,7 @@ class Dataloader():
         self.pbc = np.array(pbc)
         self.coordinates = coordinates
         self.maxnumatom = np.max(self.numatoms)
-        self.maxneigh = maxneigh_per_node * self.batchnode
+        self.maxneigh = int(maxneigh_per_node * ave_node * batchsize / edge_cap)
         cell = np.array(cell)
         expand_species = np.ones((self.numpoint, self.maxnumatom), dtype=self.int_dtype)
 
@@ -122,7 +122,7 @@ class Dataloader():
                         if  ibatch > self.batchsize-0.5: break
                         inum = self.shuffle_list[self.ipoint]
                         numatom = self.numatoms[inum]
-                        if ineigh + self.maxneigh_per_node * numatom > self.maxneigh + 0.5: break
+                        if ineigh + self.maxneigh_per_node * numatom > self.maxneigh + 0.5 or inode + numatom > self.batchnode + 0.5: break
                         icell = self.cell[inum].T
                         icart = self.coordinates[inum]
                         ipbc = self.pbc[inum]

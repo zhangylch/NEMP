@@ -92,7 +92,6 @@ class MPNN(nn.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        jax.debug.print("{x}", x=jnp.max(distances))
         sph = self.sph_cal(distvec.T / distances)
         sph_norm = segment_sum(jnp.square(sph), self.config.index_l, num_segments=rmaxl_i, indices_are_sorted=True)
         sph_norm = sph_norm + eps

@@ -160,7 +160,7 @@ def train(params, ema_params, config, optim, opt_state, ckpt, ckpt_cpu, ckpt_res
 
 key = jax.random.split(key[-1], 2)
 
-data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain, node_cap = full_config.node_cap)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=full_config.Fshuffle, ntrain=full_config.ntrain, node_cap = full_config.node_cap, edge_cap = full_config.edge_cap)
 
 full_config = replace(full_config, initpot=data_load.initpot)
 with open("full_config.json", "w") as f:

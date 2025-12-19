@@ -47,6 +47,7 @@ class JsonConfig:
     
     cutoff: float = field(default=5.0)
     node_cap: float = field(default=1.0)
+    edge_cap: float = field(default=1.0)
     npaircode: int = field(default=32)
     max_l: int = field(default=3)
     pmax_l: int = field(default=2)
