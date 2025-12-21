@@ -48,7 +48,15 @@ class Dataloader():
         self.pbc = np.array(pbc)
         self.coordinates = coordinates
         self.maxnumatom = np.max(self.numatoms)
-        self.maxneigh = int(maxneigh_per_node * ave_node * batchsize / edge_cap)
+        print("max number of atoms:", self.maxnumatom)
+        print("min number of atoms:", np.min(self.numatoms))
+        print("average number of atoms:", ave_node)
+        self.maxneigh = int(maxneigh_per_node * ave_node * batchsize / edge_cap) + 1
+        if self.maxneigh < self.maxnumatom * maxneigh_per_node:
+            raise RuntimeError("Error the given maximal neigh node of each batch is less than maxnumatom * maxneigh_per_node, please increase the batchsize or decrease edge_cap")
+        elif self.batchnode < self.maxnumatom:
+            raise RuntimeError("Error the given maximal centeral node of each node is less than maxnumatom, please increase the batchsize or node_cap")
+         
         cell = np.array(cell)
         expand_species = np.ones((self.numpoint, self.maxnumatom), dtype=self.int_dtype)
 
@@ -81,31 +89,30 @@ class Dataloader():
             self.shuffle_list = np.arange(self.numpoint) 
 
         self.size_per_step = self.batchsize * ncyc * local_size
-        self.length = int(self.numpoint / self.size_per_step)
-        self.train_length = int(ntrain / self.size_per_step)
         self.ntrain = ntrain
-        self.nval = int((self.numpoint - self.ntrain) / self.size_per_step) * self.size_per_step
+        self.nval = self.numpoint - self.ntrain
 
         self.species = expand_species
         if force_table: self.force = force.astype(self.float_dtype)
         if stress_table: self.stress = np.array(stress).astype(self.float_dtype)
         self.cell = cell
         self.pot = pot.astype(self.float_dtype)
+        self.train_mode = True
          
         print("initpot = {} \n".format(initpot))
         print("reduce_spec = {} \n".format(self.reduce_spec))
       
     def __iter__(self):
         self.ipoint = 0
+        self.train_mode= True
         return self
 
     def __next__(self):
-        uppoint = self.ipoint + self.size_per_step
-        if uppoint < self.numpoint + 0.5:
+        if self.ipoint < self.numpoint - 0.5:
             coor = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
             if self.force_table: force = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
             species = np.zeros((self.local_size, self.ncyc, self.batchnode))
-            center_factor = np.ones((self.local_size, self.ncyc, self.batchnode))
+            center_factor = np.zeros((self.local_size, self.ncyc, self.batchnode))
             neighlist = np.ones((self.local_size, self.ncyc, 2, self.maxneigh), dtype=np.int32)
             celllist = np.ones((self.local_size, self.ncyc, self.batchnode), dtype=np.int32)
             shiftimage = np.zeros((self.local_size, self.ncyc, 3, self.maxneigh))
@@ -113,13 +120,23 @@ class Dataloader():
             stress = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
             pot = np.zeros((self.local_size, self.ncyc, self.batchsize))
             numatoms = np.ones((self.local_size, self.ncyc, self.batchsize))
+            break_mode = False
             for igpu in range(self.local_size):
+                if break_mode: break
                 for icyc in range(self.ncyc):
+                    if break_mode: break
                     inode = 0
                     ineigh = 0
                     ibatch = 0
                     while True:
                         if  ibatch > self.batchsize-0.5: break
+                        if self.ipoint > self.ntrain - 0.5 and self.train_mode: 
+                            self.train_mode= False
+                            break_mode = True
+                            break
+                        if self.ipoint > self.numpoint - 0.5: 
+                            break_mode = True
+                            break 
                         inum = self.shuffle_list[self.ipoint]
                         numatom = self.numatoms[inum]
                         if ineigh + self.maxneigh_per_node * numatom > self.maxneigh + 0.5 or inode + numatom > self.batchnode + 0.5: break
@@ -143,7 +160,7 @@ class Dataloader():
                         inode += numatom
                         ibatch +=1
                         ineigh += scutnum
-                    center_factor[igpu, icyc, inode:] = np.array(0.0, dtype = self.float_dtype)
+                    center_factor[igpu, icyc, :inode] = np.array(1.0, dtype = self.float_dtype)
                     neighlist[igpu, icyc, :, ineigh:] = inode-1
                     celllist[igpu, icyc, inode:] = ibatch-1
 
@@ -153,7 +170,7 @@ class Dataloader():
             if self.stress_table:
                 abprop = abprop + (stress,)
              
-            return coor.astype(self.float_dtype), cell.astype(self.float_dtype), neighlist.astype(self.int_dtype), celllist.astype(self.int_dtype), shiftimage.astype(self.float_dtype), center_factor.astype(self.float_dtype), species.astype(self.float_dtype), numatoms, abprop
+            return self.ipoint, coor.astype(self.float_dtype), cell.astype(self.float_dtype), neighlist.astype(self.int_dtype), celllist.astype(self.int_dtype), shiftimage.astype(self.float_dtype), center_factor.astype(self.float_dtype), species.astype(self.float_dtype), numatoms, abprop
         else:
             if self.cross_val:
                 self.seed = self.seed+1

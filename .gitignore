@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.so
 
 # JAX / Tensorflow / PyTorch temporary files
 *.log

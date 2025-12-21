@@ -10,8 +10,8 @@ import numpy as np
 class CudaDataLoader:
 
     def __init__(self, loader, queue_size=2):
-        self.loader = loader
         self.idx = 0
+        self.loader = loader
         self.queue = Queue(maxsize=queue_size)
         self.worker = Thread(target=self.load_loop)
         self.worker.setDaemon(True)
@@ -24,29 +24,31 @@ class CudaDataLoader:
         # The loop that will load into the queue in the background
         while True:
             for sample in self.loader:
-                self.queue.put(self._transfer_to_gpus(sample))
+                sample_set = (sample[0], self._transfer_to_gpus(sample[1:]))
+                self.queue.put(sample_set)
 
     def __iter__(self):
         return self
 
     def __next__(self):
         if not self.worker.is_alive() and self.queue.empty():
-            self.idx = 0
             self.queue.join()
             self.worker.join()
             raise StopIteration
-        elif self.idx > self.loader.train_length-0.5 and self.val_train < 0.5:
+        elif self.idx > self.loader.ntrain-0.5 and self.val_train < 0.5:
             self.val_train=1
+            #print(self.val_train, "hello", flush=True)
             raise StopIteration
-        elif self.idx > self.loader.length-0.5 and self.val_train > 0.5:
+        elif self.idx > self.loader.numpoint-0.5 and self.val_train > 0.5:
             self.val_train=0
-            self.idx=0
+            self.idx = 0
             raise StopIteration
         else:
             out = self.queue.get()
+            self.idx = out[0]
+            #print(self.idx, "get", flush=True)
             self.queue.task_done()
-            self.idx += 1
-        return out
+        return out[1]
 
     def _transfer_to_gpus(self, data):
         """
