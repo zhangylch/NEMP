@@ -160,8 +160,8 @@ with open("full_config.json", "w") as f:
 ntrain = full_config.ntrain
 nval = data_load.nval
 nspec = data_load.nspec
-reduce_spec = data_load.reduce_spec
-com_spec = data_load.com_spec
+reduce_spec = jnp.array(data_load.reduce_spec)
+com_spec = jnp.array(data_load.com_spec)
 force_std = data_load.std
 
 nprop = 1
@@ -224,6 +224,9 @@ def make_gradient(energy_model):
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
+            jax.debug.print("pot {x} {y}", x=abpot, y=nnpot)
+            jax.debug.print("force {x} {y}", x=abforce, y=nnforce)
+            jax.debug.print("stress {x} {y}", x=abstress, y=nnstress)
             loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / numatoms)) \
                  + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) \
                  + weight[2] * jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
@@ -252,6 +255,9 @@ def make_loss(pes_model, nprop):
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
+            jax.debug.print("pot {x} {y}", x=abpot, y=nnpot)
+            jax.debug.print("force {x} {y}", x=abforce, y=nnforce)
+            jax.debug.print("stress {x} {y}", x=abstress, y=nnstress)
             loss1 = jnp.sum(jnp.square((abpot - nnpot) / numatoms)) 
             loss2 = jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) 
             loss3 = jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
@@ -306,8 +312,7 @@ if full_config.restart:
         devices
     )
     
-    if restored is not None:
-        start_step, params, ema_params, opt_state, _ = restored
+    start_step, params, ema_params, opt_state, _ = restored
     
 
 

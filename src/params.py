@@ -10,6 +10,7 @@ full_config = load_config("config.json")
 gpu_sel(full_config.local_size)
 
 import jax 
+jax.config.update("jax_debug_nans", True)
 import jax.numpy as jnp
 from low_level import sph_cal, cg_cal
 import jax.numpy as jnp

@@ -48,6 +48,7 @@ class Dataloader():
         self.pbc = np.array(pbc)
         self.coordinates = coordinates
         self.maxnumatom = np.max(self.numatoms)
+        print("tot_nodes in each calculation:", self.batchnode)
         print("max number of atoms:", self.maxnumatom)
         print("min number of atoms:", np.min(self.numatoms))
         print("average number of atoms:", ave_node)
@@ -78,9 +79,9 @@ class Dataloader():
         #  statical over species
         reduce_spec = np.unique(expand_species)
         self.nspec = reduce_spec.shape[0]
-        self.reduce_spec = jnp.array(reduce_spec.astype(self.int_dtype))
-        x, y = jnp.meshgrid(self.reduce_spec, self.reduce_spec)
-        self.com_spec = jnp.array(jnp.stack([y.ravel(), x.ravel()], axis=1).astype(self.float_dtype))
+        self.reduce_spec = reduce_spec.astype(self.float_dtype)
+        x, y = np.meshgrid(self.reduce_spec, self.reduce_spec)
+        self.com_spec = np.stack([y.ravel(), x.ravel()], axis=1).astype(self.float_dtype)
        
  
         if Fshuffle:
@@ -111,13 +112,13 @@ class Dataloader():
         if self.ipoint < self.numpoint - 0.5:
             coor = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
             if self.force_table: force = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
-            species = np.zeros((self.local_size, self.ncyc, self.batchnode))
+            species = np.zeros((self.local_size, self.ncyc, self.batchnode)) 
             center_factor = np.zeros((self.local_size, self.ncyc, self.batchnode))
             neighlist = np.ones((self.local_size, self.ncyc, 2, self.maxneigh), dtype=np.int32)
             celllist = np.ones((self.local_size, self.ncyc, self.batchnode), dtype=np.int32)
             shiftimage = np.zeros((self.local_size, self.ncyc, 3, self.maxneigh))
-            cell = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
-            stress = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
+            cell = np.tile(np.eye(3), (self.local_size, self.ncyc, self.batchsize, 1, 1))
+            if self.stress_table: stress = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
             pot = np.zeros((self.local_size, self.ncyc, self.batchsize))
             numatoms = np.ones((self.local_size, self.ncyc, self.batchsize))
             break_mode = False
@@ -155,14 +156,15 @@ class Dataloader():
                         shiftimage[igpu, icyc, :, ineigh:ineigh+scutnum] = tmp1[:, :scutnum]
                         pot[igpu, icyc, ibatch] = self.pot[inum]
                         numatoms[igpu, icyc, ibatch] = numatom
-
                         self.ipoint +=1
                         inode += numatom
                         ibatch +=1
                         ineigh += scutnum
+
                     center_factor[igpu, icyc, :inode] = np.array(1.0, dtype = self.float_dtype)
-                    neighlist[igpu, icyc, :, ineigh:] = inode-1
-                    celllist[igpu, icyc, inode:] = ibatch-1
+                    neighlist[igpu, icyc, :, ineigh:] = self.batchnode-1
+                    celllist[igpu, icyc, inode:] = self.batchsize-1
+                    species[igpu, icyc, inode:] = self.reduce_spec[0]
 
             abprop = (pot,)
             if self.force_table:

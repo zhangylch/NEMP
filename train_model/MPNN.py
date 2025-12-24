@@ -71,7 +71,7 @@ class MPNN(nn.Module):
         dtype_1 = jnp.array(1.0, dtype=dtype)
         dtype_2 = jnp.array(2.0, dtype=dtype)
         dtype_3 = jnp.array(3.0, dtype=dtype)
-        eps = jnp.array(1e-8, dtype=dtype)
+        eps = jnp.array(1e-6, dtype=dtype)
 
         nnode = cart.shape[0]
         ngraph = cell.shape[0]
@@ -127,8 +127,6 @@ class MPNN(nn.Module):
         radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
-
-
             norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f))
             add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
             norm_ead = jnp.einsum("ji, ijk -> ik", sph[:pnorb_i], add_orb) / jnp.sqrt(dtype_2)
