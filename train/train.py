@@ -224,9 +224,6 @@ def make_gradient(energy_model):
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
-            jax.debug.print("pot {x} {y}", x=abpot, y=nnpot)
-            jax.debug.print("force {x} {y}", x=abforce, y=nnforce)
-            jax.debug.print("stress {x} {y}", x=abstress, y=nnstress)
             loss = weight[0] * jnp.sum(jnp.square((abpot - nnpot) / numatoms)) \
                  + weight[1] * jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) \
                  + weight[2] * jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
@@ -255,9 +252,6 @@ def make_loss(pes_model, nprop):
         if full_config.stress_table:
             abpot, abforce, abstress = abprop
             nnpot, nnforce, nnstress = nnprop
-            jax.debug.print("pot {x} {y}", x=abpot, y=nnpot)
-            jax.debug.print("force {x} {y}", x=abforce, y=nnforce)
-            jax.debug.print("stress {x} {y}", x=abstress, y=nnstress)
             loss1 = jnp.sum(jnp.square((abpot - nnpot) / numatoms)) 
             loss2 = jnp.sum(jnp.square(abforce - nnforce) / (jnp.array(3.0) * numatoms[celllist])[:, None]) 
             loss3 = jnp.sum(jnp.square(abstress - nnstress) / jnp.array(9.0)) 
