@@ -290,10 +290,6 @@ ferr=open("nn.err","w")
 ferr.write("Hybrid Equivariant MPNN package based on three-body descriptors \n")
 ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
 
-def to_cpu(x):
-    if isinstance(x, (jax.Array, jnp.ndarray)):
-        return jax.device_put(x, jax.devices("cpu")[0])
-    return x
                                     
 start_step = 0
 devices = jax.local_devices()
@@ -307,6 +303,9 @@ if full_config.restart:
     )
     
     start_step, params, ema_params, opt_state, _ = restored
+    params = jax.device_put_replicated(params, devices)
+    ema_params = jax.device_put_replicated(ema_params, devices)
+    opt_state = jax.device_put_replicated(opt_state, devices)
     
 
 

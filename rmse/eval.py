@@ -95,7 +95,7 @@ val_ens = val_loop(full_config.ncyc)
 ploss_val = jnp.zeros(nprop)        
 for data in data_load:
     coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
-    ploss_val = val_ens(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
+    ploss_val = val_ens(ema_params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
 
 ploss_val = jnp.sqrt(ploss_val / prop_length)
 print(ploss_val)

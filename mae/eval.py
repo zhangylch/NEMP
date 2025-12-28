@@ -44,8 +44,7 @@ restored = restore_checkpoint(
     devices
 )
 
-if restored is not None:
-    start_step, params, ema_params, opt_state, model_config = restored
+start_step, params, ema_params, opt_state, model_config = restored
 
 #==============================Equi MPNN==============================================================
 
@@ -76,7 +75,6 @@ def make_loss(pes_model, nprop):
         else:
             abpot, = abprop
             nnpot, = nnprop
-            jax.debug.print("{x} {y}", x= abpot, y=nnpot)
             ploss = jnp.sum(jnp.abs((abpot - nnpot) / jnp.sum(center_factor, axis=1)))
         
         return ploss
@@ -106,7 +104,7 @@ val_ens = val_loop(full_config.ncyc)
 ploss_val = jnp.zeros(nprop)        
 for data in data_load:
     coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
-    ploss_val = val_ens(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
+    ploss_val = val_ens(ema_params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
     
 ploss_val = ploss_val / prop_length
 
