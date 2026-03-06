@@ -46,7 +46,7 @@ def read_xyz(filename, force_table=True, stress_table=False):
             ipbc = [x == 'T' for x in pbc_match.group(1).split()]
         pbc.append(np.array(ipbc).astype(np.int32))
         
-        energy_match = re.search(r'energy=([-\d.]+)', header)
+        energy_match = re.search(r'energy=([-\d.eE+]+)', header)
         energy = float(energy_match.group(1)) if energy_match else None
         pot.append(energy)
         
