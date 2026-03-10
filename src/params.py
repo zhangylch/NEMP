@@ -24,7 +24,8 @@ if full_config.jnp_dtype=='float32':
 
 rmaxl = full_config.max_l + 1
 prmaxl = full_config.pmax_l + 1
-
+if full_config.pmax_l > full_config.max_l + 0.5: 
+    raise RuntimeError("Invalid setting of pmax_l. pmax_l must be less than or equal to rmax_l.")
 def contract_sph(rmaxl, prmaxl):
 
     index_i1 = []
