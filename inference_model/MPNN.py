@@ -155,8 +155,8 @@ class MPNN(nn.Module):
             )
 
             if self.config.use_norm:
-                norm_factor = jnp.sqrt(jnp.sum(jnp.square(center_orbital)) / (jnp.sum(center_factor) * pnorb_i * nwave_f))
-                center_orbital = center_orbital / norm_factor
+                norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f*nwave_f)
+                center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
 
             radial = self.ead_list[iter_loop](ead).reshape(-1, 3, prmaxl_i, nwave_i)
         # --- End of Message Passing Loop ---

@@ -2,7 +2,6 @@ import os
 import jax
 import jax.numpy as jnp
 from ase import Atoms
-from ase.constraints import FixAtoms
 from ase.stress import full_3x3_to_voigt_6_stress
 from ase.calculators.calculator import Calculator
 import numpy as np
@@ -10,6 +9,7 @@ import ase.calculators.nemp.MPNN as MPNN
 from ase.calculators.nemp.convert_type import convert_dtype
 from ase.calculators.nemp.data_config import ModelConfig
 from ase.calculators.nemp.read_json import load_config
+from ase.calculators.nemp.save_checkpoint import restore_checkpoint
 import orbax.checkpoint as oc
 from ase.calculators.calculator import (Calculator, all_changes,
                                         PropertyNotImplementedError)
@@ -32,18 +32,6 @@ class NEMP(Calculator):
 
         full_config = load_config(fconfig)
         self.atomic_energy = full_config.initpot
-        self.fixed_cart = None
-        self.capacity = 1.5
-
-        self.found_fixed_atoms = False
-        if initatoms.constraints:
-            
-            for constr in initatoms.constraints:
-                # 检查这个约束的类型是不是 FixAtoms
-                if isinstance(constr, FixAtoms):
-                    self.found_fixed_atoms = True
-                    # 如果是，就用 .get_indices() 方法获取索引
-                    self.fixed_indices = constr.get_indices()
 
         if "32" in full_config.jnp_dtype:
             self.int_dtype = np.int32
@@ -57,10 +45,7 @@ class NEMP(Calculator):
             self.jnp_dtype = jnp.float64
             jax.config.update("jax_enable_x64", True)
 
-        if jax.default_backend() == "gpu":
-            ckpath = full_config.ckpath
-        else:
-            ckpath = full_config.ckpath_cpu
+        ckpath = full_config.ckpath
 
         #=======================================================
         self.cutoff = full_config.cutoff
@@ -70,7 +55,7 @@ class NEMP(Calculator):
         self.neighlist = None
         self.species = None
         self.disp_cell = jnp.zeros((3,3))
-        self.pbc = np.array(pbc, dtype=np.int32)
+        self.pbc = np.array(pbc, dtype=self.int_dtype)
         self.old_positions = initatoms.get_positions()
         self.properties = properties
         self.cut_neigh = self._cut_neigh()
@@ -78,16 +63,13 @@ class NEMP(Calculator):
         self.ghostneigh = skin_neigh + self.maxneigh
 
         # load params 
-        options = oc.CheckpointManagerOptions()
-        ckpt = oc.CheckpointManager(ckpath, options=options)
-        step = ckpt.latest_step()
-        restored = ckpt.restore(step-1)
-        params = restored["params"]
-        model_config = restored["config"]
+        devices = jax.local_devices()
+        checkpoint_data = restore_checkpoint(ckpath, devices)
+        restored_step, params, ema_params, opt_state, model_config = checkpoint_data
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
         config = ModelConfig(**model_config)
         model = MPNN.MPNN(config)
-        self.params = stop_grad(params, self.jnp_dtype)
+        self.params = stop_grad(ema_params, self.jnp_dtype)
 
         #initialize the model
         cart = self.initialize_system(initatoms)
@@ -125,7 +107,7 @@ class NEMP(Calculator):
         positions = atoms.get_positions()
         if "cell" in system_changes:
             cell = atoms.get_cell()
-            self.getneigh.init_neigh(self.cutoff+self.skin, self.cutoff+self.skin, cell.T, self.pbc, self.capacity)
+            self.getneigh.init_neigh(self.cutoff+self.skin, self.cutoff+self.skin, cell.T, self.pbc, 1.5)
             self.cell = jax.device_put(cell.astype(self.np_dtype))
 
         cart, neighlist, shifts, scutnum = self.getneigh.get_neigh(positions.T, np.int32(self.ghostneigh))
@@ -158,14 +140,8 @@ class NEMP(Calculator):
         if self.skin_judge:
             cart = self.initialize_system(atoms, system_changes)
             atoms.set_positions(cart)
-            if self.found_fixed_atoms:
-                self.fixed_cart = cart[self.fixed_indices]
-
 
         positions = atoms.get_positions()
-        if self.found_fixed_atoms:
-            positions[self.fixed_indices] = self.fixed_cart
-
         positions = jax.device_put(positions.astype(self.np_dtype))
 
         positions, distvec, skin_judge, neighlist, shifts = self.cut_neigh(positions, self.cell, self.neighlist, self.shifts, self.old_distvec)
@@ -174,18 +150,15 @@ class NEMP(Calculator):
             self.old_distvec = distvec
 
         results = self.pes(self.params, positions, self.cell, self.disp_cell, neighlist, shifts, self.center_factor, self.species)
-        # Convert results back to numpy arrays for ASE
         results = jax.device_get(jax.lax.stop_gradient(results))
         
 
         for name, iprop in zip(self.properties, results):
-            iprop = iprop.astype(np.float64)
             if "stress" in name:
                 virial = iprop
                 stress = virial/atoms.get_volume()
                 iprop = full_3x3_to_voigt_6_stress(stress)
-
-            #if "energy" in iprop:
-            #    iprop = iprop + positions.shape[0] * self.atomic_energy
-            #    print(iprop)
+            if "energy" in name:
+                #print("eeee",iprop)
+                iprop = iprop + positions.shape[0] * self.atomic_energy
             self.results[name] = iprop

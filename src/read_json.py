@@ -40,7 +40,6 @@ class JsonConfig:
     decay_factor: float = field(default=0.5)
     
     ckpath: str = field(default=os.getcwd()+"/ckpt_dir/")
-    ckpath_cpu: str = field(default=os.getcwd()+"/ckpt_dir_cpu/")
     datafolder: str = field(default="/data1/home/hhu17/zyl/data/Equi-EANN/3BPA/date/dataset_3BPA/train_300K.xyz")
     #======= electron sample============
     weight_decay: float = field(default=1e-9)
