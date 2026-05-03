@@ -35,4 +35,5 @@ class ModelConfig:
     prmaxl: int = 2
     MP_loop: int = 2
     pn: int = 6
+    tp_backend: str = "custom"
 
