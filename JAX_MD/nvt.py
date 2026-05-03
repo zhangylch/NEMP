@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 from jax_md import simulate, space, partition, quantity
 from jax import random, jit
-from flax import traverse_util
 import numpy as np
 import threading
 import queue
@@ -26,9 +25,7 @@ from ase.io import extxyz
 
 
 def stop_grad(variables):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    return jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
 
 
 #UNIT DEFINATION the default mass is amu, so if you use eV as your output energy unitand angstrom as the unit of your coordinates, then the unit of time is around 10.18fs
