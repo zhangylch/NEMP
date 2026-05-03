@@ -187,7 +187,7 @@ coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, a
 initdata = (coor[0], cell[0], jnp.zeros_like(cell[0]), neighlist[0], celllist[0], shiftimage[0], center_factor[0], species[0])
 
 #=================================================Equi MPNN===================================================================
-config = ModelConfig(nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
+config = ModelConfig(nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462, tp_backend=full_config.tp_backend)
 
 model = MPNN.MPNN(config)
 
