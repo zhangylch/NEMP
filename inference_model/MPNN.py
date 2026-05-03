@@ -13,6 +13,7 @@ from jax.lax import fori_loop
 from jax import Array
 #  need to be updated for JAX_MD
 from low_level import sph_cal
+from low_level import cueq_sparse_tp
 from src.data_config import ModelConfig
 from low_level import MLP  # Refers to the final, robust MLP.py
 
@@ -32,6 +33,23 @@ class MPNN(nn.Module):
         dtype = self.config.initbias_neigh.dtype
 
         self.sph_cal=sph_cal.SPH_CAL(max_l = self.config.rmaxl-1)
+        self.tp_backend = getattr(self.config, "tp_backend", "custom")
+        if self.tp_backend not in ("custom", "cueq"):
+            raise ValueError(f"Unsupported tp_backend={self.tp_backend!r}; use 'custom' or 'cueq'.")
+        self.sparse_cg_polynomial = None
+        if self.tp_backend == "cueq":
+            self.sparse_cg_polynomial = cueq_sparse_tp.build_sparse_cg_polynomial(
+                index_i1=self.config.index_i1,
+                index_i2=self.config.index_i2,
+                ens_cg=self.config.ens_cg,
+                index_den=self.config.index_den,
+                index_add=self.config.index_add,
+                index_squ=self.config.index_squ,
+                num_input_orbitals=self.config.rmaxl * self.config.rmaxl,
+                num_iter_orbitals=self.config.prmaxl * self.config.prmaxl,
+                num_output_orbitals=self.config.prmaxl * self.config.prmaxl,
+                num_cg=self.config.num_cg,
+            )
 
         self.scale = self.param('scale', lambda rng: jnp.array(np.array([1.0, 0.0]*self.config.nspec), dtype=dtype))
 
@@ -181,11 +199,12 @@ class MPNN(nn.Module):
         worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i+self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        inter_orbital = jnp.einsum("ikj, ikj, k -> kij", init_orb[:, self.config.index_i1], iter_orb[:, self.config.index_i2], self.config.ens_cg)
-
-        mp_orbital = segment_sum(inter_orbital, self.config.index_den, num_segments=self.config.index_add.shape[0], indices_are_sorted=True)
-
-        iter_orb = segment_sum(mp_orbital*l_coeff[self.config.index_squ], self.config.index_add, num_segments=prmaxl_i * prmaxl_i)
+        iter_orb = self.sparse_cg_tensor_product(
+            init_orb=init_orb,
+            iter_orb=iter_orb,
+            l_coeff=l_coeff,
+            num_output_orbitals=prmaxl_i * prmaxl_i,
+        )
         norm = ave_neigh * ave_neigh * jnp.sqrt(self.config.count_l[pindex_l])
         iter_orb = jnp.einsum("ij, jik, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
 
@@ -194,3 +213,31 @@ class MPNN(nn.Module):
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital
+
+
+    def sparse_cg_tensor_product(self, init_orb, iter_orb, l_coeff, num_output_orbitals):
+        if self.tp_backend == "custom":
+            inter_orbital = jnp.einsum(
+                "ikj, ikj, k -> kij",
+                init_orb[:, self.config.index_i1],
+                iter_orb[:, self.config.index_i2],
+                self.config.ens_cg,
+            )
+            mp_orbital = segment_sum(
+                inter_orbital,
+                self.config.index_den,
+                num_segments=self.config.index_add.shape[0],
+                indices_are_sorted=True,
+            )
+            return segment_sum(
+                mp_orbital * l_coeff[self.config.index_squ],
+                self.config.index_add,
+                num_segments=num_output_orbitals,
+            )
+        return cueq_sparse_tp.sparse_cg_tensor_product_cueq(
+            self.sparse_cg_polynomial,
+            init_orb,
+            iter_orb,
+            l_coeff,
+            num_output_orbitals=num_output_orbitals,
+        )
