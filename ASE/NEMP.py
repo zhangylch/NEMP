@@ -13,13 +13,10 @@ from ase.calculators.nemp.save_checkpoint import restore_checkpoint
 import orbax.checkpoint as oc
 from ase.calculators.calculator import (Calculator, all_changes,
                                         PropertyNotImplementedError)
-from flax import traverse_util
 
 def stop_grad(variables, dtype):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    new_vars = {k: v.astype(dtype) for k, v in new_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    variables = jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
+    return jax.tree.map(lambda v: v.astype(dtype) if hasattr(v, "astype") else v, variables)
 
 
 class NEMP(Calculator):
