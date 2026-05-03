@@ -1,62 +1,178 @@
-import sys
 import numpy as np
 import jax
-import flax
 import jax.numpy as jnp
-import jax.random as jrm
-from jax.numpy import dtype,array
-import flax.linen as nn
+from flax import nnx
 from jax.ops import segment_sum
-from typing import Sequence, List, Union, Optional
-from flax.core import freeze
-from jax.lax import fori_loop
-from jax import Array
-#  need to be updated for JAX_MD
+from collections.abc import Mapping
 from low_level import sph_cal
 from src.data_config import ModelConfig
-from low_level import MLP  # Refers to the final, robust MLP.py
+from low_level import MLP
 
 
+def _as_rngs(rngs):
+    if isinstance(rngs, nnx.Rngs):
+        return rngs
+    if isinstance(rngs, Mapping):
+        rngs = rngs.get("params", rngs.get("default"))
+    return nnx.Rngs(rngs)
 
 
-class MPNN(nn.Module):
+class MPNNCore(nnx.Module):
     """
-    An equivariant message passing neural network, optimized for JAX.
-    This version uses a standard Python for-loop for the message passing steps,
-    which is robust, readable, and efficient for a typical number of iterations.
+    NNX implementation of the equivariant message passing neural network.
     """
-    config: ModelConfig
 
-    def setup(self):
-        # The model's data type is dynamically inferred from the configuration.
-        dtype = self.config.initbias_neigh.dtype
+    def __init__(self, config: ModelConfig, *, rngs: nnx.Rngs):
+        self.config = config
+        dtype = config.initbias_neigh.dtype
 
-        self.sph_cal=sph_cal.SPH_CAL(max_l = self.config.rmaxl-1)
+        self.sph_cal = sph_cal.SPH_CAL(max_l=config.rmaxl - 1)
 
-        self.scale = self.param('scale', lambda rng: jnp.array(np.array([1.0, 0.0]*self.config.nspec), dtype=dtype))
+        self.scale = nnx.Param(
+            jnp.array(np.array([1.0, 0.0] * config.nspec), dtype=dtype)
+        )
+        self.spec_coeff = nnx.Param(
+            nnx.initializers.normal(1.0)(
+                rngs.params(), (config.nspec, config.nwave, config.nwave), dtype
+            )
+        )
+        self.contract_coeff = nnx.Param(
+            nnx.initializers.normal(1.0)(
+                rngs.params(),
+                (config.MP_loop, config.nspec, 3, config.nwave, config.nwave),
+                dtype,
+            )
+        )
+        self.l_coeff = nnx.Param(
+            nnx.initializers.normal(1.0)(
+                rngs.params(),
+                (config.MP_loop, config.num_cg, config.nspec, config.nwave),
+                dtype,
+            )
+        )
 
-        self.spec_coeff = self.param('spec_coeff', nn.initializers.normal(1.0), (self.config.nspec, self.config.nwave, self.config.nwave), dtype)
+        com_spec_features = config.com_spec.shape[-1]
+        self.neighcoeffnn = MLP.MLP(
+            in_features=com_spec_features,
+            num_output=config.npaircode,
+            num_blocks=config.emb_nl[0],
+            features=config.emb_nl[1],
+            layers_per_block=config.emb_nl[2],
+            use_bias=True,
+            bias_init_value=jnp.ones(config.npaircode),
+            cst=config.cst,
+            dtype=dtype,
+            rngs=rngs,
+        )
+        self.neighnn = MLP.MLP(
+            in_features=config.npaircode,
+            num_output=config.nradial,
+            num_blocks=config.emb_nl[0],
+            features=config.emb_nl[1],
+            layers_per_block=config.emb_nl[2],
+            use_bias=True,
+            bias_init_value=config.initbias_neigh,
+            cst=config.cst,
+            dtype=dtype,
+            rngs=rngs,
+        )
+        self.rweightnn = MLP.MLP(
+            in_features=config.npaircode,
+            num_output=config.nradial + config.nwave,
+            num_blocks=config.emb_nl[0],
+            features=config.emb_nl[1],
+            layers_per_block=config.emb_nl[2],
+            use_bias=False,
+            bias_init_value=None,
+            cst=config.cst,
+            dtype=dtype,
+            rngs=rngs,
+        )
+        self.radialnn = MLP.MLP(
+            in_features=2 * config.nradial,
+            num_output=(config.prmaxl + 2) * config.nwave,
+            num_blocks=config.radial_nl[0],
+            features=config.radial_nl[1],
+            layers_per_block=config.radial_nl[2],
+            use_linear=config.radial_nl[3],
+            use_bias=False,
+            bias_init_value=None,
+            cst=config.cst,
+            dtype=dtype,
+            rngs=rngs,
+        )
+        self.MPNN_list = nnx.List([
+            MLP.MLP(
+                in_features=(3 + iMP_loop) * config.nwave,
+                num_output=(config.prmaxl + config.rmaxl) * config.nwave,
+                num_blocks=config.MP_nl[0],
+                features=config.MP_nl[1],
+                layers_per_block=config.MP_nl[2],
+                use_linear=config.MP_nl[3],
+                use_bias=False,
+                bias_init_value=None,
+                cst=config.cst,
+                dtype=dtype,
+                rngs=rngs,
+            )
+            for iMP_loop in range(config.MP_loop)
+        ])
+        self.ead_list = nnx.List([
+            MLP.MLP(
+                in_features=(3 + iMP_loop) * config.nwave,
+                num_output=3 * config.prmaxl * config.nwave,
+                num_blocks=config.MP_nl[0],
+                features=config.MP_nl[1],
+                layers_per_block=config.MP_nl[2],
+                use_linear=config.MP_nl[3],
+                use_bias=False,
+                bias_init_value=None,
+                cst=config.cst,
+                dtype=dtype,
+                rngs=rngs,
+            )
+            for iMP_loop in range(config.MP_loop)
+        ])
+        self.ead_list.append(
+            MLP.MLP(
+                in_features=2 * config.nwave,
+                num_output=3 * config.prmaxl * config.nwave,
+                num_blocks=config.MP_nl[0],
+                features=config.MP_nl[1],
+                layers_per_block=config.MP_nl[2],
+                use_linear=config.MP_nl[3],
+                use_bias=False,
+                bias_init_value=None,
+                cst=config.cst,
+                dtype=dtype,
+                rngs=rngs,
+            )
+        )
+        self.outnn = MLP.MLP(
+            in_features=(config.MP_loop + 2) * config.nwave,
+            num_output=1,
+            num_blocks=config.out_nl[0],
+            features=config.out_nl[1],
+            layers_per_block=config.out_nl[2],
+            use_linear=config.out_nl[3],
+            use_bias=config.use_bias,
+            bias_init_value=None,
+            cst=config.cst,
+            dtype=dtype,
+            rngs=rngs,
+        )
 
-        self.contract_coeff = self.param('contract_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.nspec, 3, self.config.nwave, self.config.nwave), dtype)
-
-        self.l_coeff = self.param('l_coeff', nn.initializers.normal(1.0), (self.config.MP_loop, self.config.num_cg, self.config.nspec, self.config.nwave), dtype)
-
-        self.neighcoeffnn = MLP.MLP(num_output = self.config.npaircode, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=True, bias_init_value = jnp.ones(self.config.npaircode), cst=self.config.cst, dtype=dtype)
-
-        self.neighnn = MLP.MLP(num_output = self.config.nradial, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=True, bias_init_value = self.config.initbias_neigh, cst=self.config.cst, dtype=dtype)
-
-        self.rweightnn = MLP.MLP(num_output = self.config.nradial + self.config.nwave, num_blocks = self.config.emb_nl[0], features = self.config.emb_nl[1], layers_per_block = self.config.emb_nl[2], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype)
-
-        self.radialnn = MLP.MLP(num_output = (self.config.prmaxl+2) * self.config.nwave, num_blocks = self.config.radial_nl[0], features = self.config.radial_nl[1], layers_per_block = self.config.radial_nl[2], use_linear = self.config.radial_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype)
-
-        self.MPNN_list=[MLP.MLP(num_output = (self.config.prmaxl + self.config.rmaxl)*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop)]
-
-        self.ead_list=[MLP.MLP(num_output = 3*self.config.prmaxl*self.config.nwave, num_blocks = self.config.MP_nl[0], features = self.config.MP_nl[1], layers_per_block = self.config.MP_nl[2], use_linear = self.config.MP_nl[3], use_bias=False, bias_init_value = None, cst=self.config.cst, dtype=dtype) for iMP_loop in range(self.config.MP_loop+1)]
-
-        self.outnn=MLP.MLP(num_output = 1, num_blocks = self.config.out_nl[0], features = self.config.out_nl[1], layers_per_block = self.config.out_nl[2], use_linear=self.config.out_nl[3], use_bias=self.config.use_bias, bias_init_value = None, cst=self.config.cst, dtype=dtype)
-
-
-    def __call__(self, cart, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+    def __call__(
+        self,
+        cart,
+        cell,
+        disp_cell,
+        neighlist,
+        celllist,
+        shiftimage,
+        center_factor,
+        species,
+    ):
         dtype = self.config.initbias_neigh.dtype
         assert cart.dtype == dtype, f"Input cart dtype {cart.dtype} must match config dtype {dtype}"
 
@@ -114,16 +230,15 @@ class MPNN(nn.Module):
         radial_func = jnp.sinc(norm_dist[:, None] * emb_coeff) * cut_func[:, None]
         radial_func = jnp.concatenate((smooth_ead[:, nwave_i:], radial_func), axis=1)
 
-        wradial = self.radialnn(radial_func).reshape(-1, prmaxl_i+2, nwave_i)
+        wradial = self.radialnn(radial_func).reshape(-1, prmaxl_i + 2, nwave_i)
         ead = jnp.concatenate((smooth_ead[:, :nwave_i], wradial[:, -1]), axis=1)
         density = segment_sum(wradial[:, -2], neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
         pindex_l = self.config.index_l[:pnorb_i]
         worbital = jnp.einsum("ijk, ji -> ijk", wradial[:, pindex_l], sph[:pnorb_i])
         center_orbital = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
-        center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
+        center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff[...] / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
 
-        # --- Message Passing Loop using a standard Python for-loop ---
         radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
@@ -137,14 +252,14 @@ class MPNN(nn.Module):
             density1 = jnp.sum(sum_orb * norm_corb, axis=1)
             density = jnp.concatenate((density, density1), axis=1)
 
-            orb_coeff = self.MPNN_list[iter_loop](ead).reshape(-1, prmaxl_i+rmaxl_i, self.config.nwave)
-            contract_coeff_iter = (self.contract_coeff / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
-            l_coeff_iter = self.l_coeff[iter_loop]
+            orb_coeff = self.MPNN_list[iter_loop](ead).reshape(-1, prmaxl_i + rmaxl_i, self.config.nwave)
+            contract_coeff_iter = (self.contract_coeff[...] / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
+            l_coeff_iter = self.l_coeff[...][iter_loop]
 
             center_orbital = self.sum_interaction(
-                nnode = nnode,
-                prmaxl_i = prmaxl_i,
-                nwave_i = nwave_i,
+                nnode=nnode,
+                prmaxl_i=prmaxl_i,
+                nwave_i=nwave_i,
                 center_orbital=center_orbital,
                 contract_coeff=contract_coeff_iter,
                 l_coeff=l_coeff_iter[:, spec_indices],
@@ -153,14 +268,13 @@ class MPNN(nn.Module):
                 ave_neigh=ave_neigh,
                 pindex_l=pindex_l,
                 sph=sph,
-                dtype_2=dtype_2
+                dtype_2=dtype_2,
             )
 
             radial = self.ead_list[iter_loop](ead).reshape(-1, 3, prmaxl_i, nwave_i)
             if self.config.use_norm:
-                norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f*nwave_f)
+                norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f * nwave_f)
                 center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
-        # --- End of Message Passing Loop ---
 
         norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f * dtype_3))
         orbital = jnp.einsum("iljk, ji -> ijk", radial[:, :, pindex_l], sph[:pnorb_i])
@@ -168,31 +282,64 @@ class MPNN(nn.Module):
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)
         density = jnp.concatenate((density, density1), axis=1)
 
-        scale = self.scale.reshape(-1, 2)[spec_indices]
+        scale = self.scale[...].reshape(-1, 2)[spec_indices]
         atomic_ene = self.outnn(density / ave_neigh).reshape(-1)
-        atomic_ene = (atomic_ene*scale[:, 0] + scale[:, 1]) * center_factor
+        atomic_ene = (atomic_ene * scale[:, 0] + scale[:, 1]) * center_factor
         graph_ene = segment_sum(atomic_ene, celllist, num_segments=ngraph, indices_are_sorted=True) * jnp.array(self.config.std, dtype=dtype)
 
-        return jnp.sum(graph_ene), graph_ene 
-
+        return jnp.sum(graph_ene), graph_ene
 
     def sum_interaction(self, nnode, prmaxl_i, nwave_i, center_orbital, contract_coeff, l_coeff, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
         corbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 0])
         iter_orb = segment_sum(corbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
-        worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i+self.config.index_l], sph)
+        worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
         inter_orbital = jnp.einsum("ikj, ikj, k -> kij", init_orb[:, self.config.index_i1], iter_orb[:, self.config.index_i2], self.config.ens_cg)
-
         mp_orbital = segment_sum(inter_orbital, self.config.index_den, num_segments=self.config.index_add.shape[0], indices_are_sorted=True)
-
-        iter_orb = segment_sum(mp_orbital*l_coeff[self.config.index_squ], self.config.index_add, num_segments=prmaxl_i * prmaxl_i)
+        iter_orb = segment_sum(mp_orbital * l_coeff[self.config.index_squ], self.config.index_add, num_segments=prmaxl_i * prmaxl_i)
         norm = ave_neigh * ave_neigh * jnp.sqrt(self.config.count_l[pindex_l])
         iter_orb = jnp.einsum("ij, jik, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
 
         center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 2])
-
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital
+
+
+class MPNN:
+    """
+    Compatibility wrapper exposing the previous Linen-style init/apply API.
+    Internally this runs the NNX MPNNCore via split/merge.
+    """
+
+    def __init__(self, config: ModelConfig):
+        self.config = config
+        self.graphdef = self._make_graphdef()
+
+    def _build(self, rngs):
+        return MPNNCore(self.config, rngs=rngs)
+
+    def _make_graphdef(self):
+        graphdef, _ = nnx.split(self._build(nnx.Rngs(0)), nnx.Param)
+        return graphdef
+
+    def init(self, rngs, *args, **kwargs):
+        graphdef, params = nnx.split(self._build(_as_rngs(rngs)), nnx.Param)
+        self.graphdef = graphdef
+        return params
+
+    def _state_from_params(self, params):
+        if isinstance(params, Mapping) and "params" in params and len(params) == 1:
+            params = params["params"]
+        if isinstance(params, nnx.State):
+            return params
+
+        state = nnx.state(self._build(nnx.Rngs(0)), nnx.Param)
+        nnx.replace_by_pure_dict(state, params)
+        return state
+
+    def apply(self, params, *args, **kwargs):
+        model = nnx.merge(self.graphdef, self._state_from_params(params))
+        return model(*args, **kwargs)
