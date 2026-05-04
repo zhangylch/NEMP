@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
 from collections.abc import Mapping
-from low_level import sph_cal
+from low_level import cueq_tp, sph_cal
 from src.data_config import ModelConfig
 from low_level import MLP
 
@@ -27,6 +27,9 @@ class MPNNCore(nnx.Module):
         dtype = config.initbias_neigh.dtype
 
         self.sph_cal = sph_cal.SPH_CAL(max_l=config.rmaxl - 1)
+        self.tp_polynomial = nnx.static(
+            cueq_tp.tensor_product_descriptor(config.rmaxl, config.prmaxl, config.nwave)
+        )
 
         self.scale = nnx.Param(
             jnp.array(np.array([1.0, 0.0] * config.nspec), dtype=dtype)
@@ -282,11 +285,18 @@ class MPNNCore(nnx.Module):
         worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        inter_orbital = jnp.einsum("ikj, ikj, k -> kij", init_orb[:, self.config.index_i1], iter_orb[:, self.config.index_i2], self.config.ens_cg)
-        mp_orbital = segment_sum(inter_orbital, self.config.index_den, num_segments=self.config.index_add.shape[0], indices_are_sorted=True)
-        iter_orb = segment_sum(mp_orbital * l_coeff[self.config.index_squ], self.config.index_add, num_segments=prmaxl_i * prmaxl_i)
+        iter_orb = cueq_tp.tensor_product(
+            self.tp_polynomial,
+            init_orb,
+            iter_orb,
+            l_coeff,
+            self.config.rmaxl,
+            prmaxl_i,
+            nwave_i,
+            self.config.initbias_neigh.dtype,
+        )
         norm = ave_neigh * ave_neigh * jnp.sqrt(self.config.count_l[pindex_l])
-        iter_orb = jnp.einsum("ij, jik, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
+        iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
 
         center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 2])
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
