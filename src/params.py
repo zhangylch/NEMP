@@ -3,7 +3,7 @@ import jax.numpy as jnp
 
 from src.read_json import load_config
 from src.gpu_sel import gpu_sel
-from low_level import sph_cal, cueq_tp
+from low_level import cueq_tp
 
 
 full_config = load_config("config.json")
@@ -34,6 +34,5 @@ num_cg, count_l = cueq_tp.tensor_product_path_metadata(
 )
 
 initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.01
-sph_pes = sph_cal.SPH_CAL(max_l=rmaxl - 1)
 
 print("cueq tensor product path number: ", num_cg)
