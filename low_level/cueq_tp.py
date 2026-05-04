@@ -1,6 +1,7 @@
 import cuequivariance as cue
 import cuequivariance_jax as cuex
 import jax.numpy as jnp
+from jax.ops import segment_sum
 
 
 LAYOUT = cue.IrrepsLayout.ir_mul
@@ -37,6 +38,33 @@ def orbital_index_l(max_l):
 
 def density_cg(index_l):
     return jnp.reciprocal(jnp.sqrt(2.0 * index_l + 1.0))
+
+
+def spherical_harmonics(max_l, vectors):
+    vector_rep = cuex.RepArray(
+        cue.Irreps("O3", "1o"),
+        vectors[:, [1, 2, 0]],
+        LAYOUT,
+    )
+    harmonics = cuex.spherical_harmonics(
+        list(range(max_l)),
+        vector_rep,
+        normalize=False,
+    )
+    return harmonics.array.T
+
+
+def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
+    sph = spherical_harmonics(max_l, vectors)
+    sph_norm = segment_sum(
+        jnp.square(sph),
+        index_l,
+        num_segments=max_l,
+        indices_are_sorted=True,
+    )
+    sph_norm = sph_norm + eps
+    l_value = index_l.astype(sph.dtype)
+    return sph / jnp.sqrt(sph_norm[index_l]) * jnp.sqrt(2.0 * l_value[:, None] + 1.0)
 
 
 def diagonal_channel_weights(l_coeff, nwave):
