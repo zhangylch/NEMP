@@ -1,4 +1,5 @@
 import cuequivariance as cue
+import jax.numpy as jnp
 
 from low_level import cueq_tp
 
@@ -40,3 +41,42 @@ def test_o3_natural_parity_matches_previous_even_path_rule():
 
     assert list(map(int, o3_count_l)) == old_count_l
     assert so3_count_l != old_count_l
+
+
+def test_cueq_spherical_harmonics_uses_nemp_layout():
+    vectors = jnp.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 2.0, 3.0],
+        ],
+        dtype=jnp.float32,
+    )
+    vectors = vectors / jnp.linalg.norm(vectors, axis=1, keepdims=True)
+
+    index_l = cueq_tp.orbital_index_l(3)
+    eps = jnp.array(1e-8, dtype=vectors.dtype)
+    sph = cueq_tp.normalized_spherical_harmonics(
+        3,
+        vectors,
+        index_l,
+        eps,
+    )
+
+    expected = jnp.array(
+        [
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 1.7320508, 0.0, 0.9258201],
+            [0.0, 0.0, 1.7320508, 1.38873],
+            [1.7320508, 0.0, 0.0, 0.4629101],
+            [0.0, 0.0, 0.0, 0.5532834],
+            [0.0, 0.0, 0.0, 1.65985],
+            [-1.118034, -1.118034, 2.236068, 1.0381744],
+            [0.0, 0.0, 0.0, 0.829925],
+            [1.9364917, -1.9364917, 0.0, -0.4149625],
+        ],
+        dtype=jnp.float32,
+    )
+
+    assert jnp.allclose(sph, expected, atol=3e-6, rtol=3e-6)
