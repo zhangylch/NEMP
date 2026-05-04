@@ -1,0 +1,74 @@
+import cuequivariance as cue
+import cuequivariance_jax as cuex
+import jax.numpy as jnp
+
+
+LAYOUT = cue.IrrepsLayout.ir_mul
+
+
+def parity_irreps(max_l, nwave):
+    terms = [f"{nwave}x{l}{'e' if l % 2 == 0 else 'o'}" for l in range(max_l)]
+    return cue.Irreps("O3", " + ".join(terms))
+
+
+def tensor_product_descriptor(rmaxl, prmaxl, nwave):
+    return cue.descriptors.fully_connected_tensor_product(
+        parity_irreps(rmaxl, nwave),
+        parity_irreps(prmaxl, nwave),
+        parity_irreps(prmaxl, nwave),
+    )
+
+
+def tensor_product_path_metadata(rmaxl, prmaxl, nwave):
+    poly = tensor_product_descriptor(rmaxl, prmaxl, nwave)
+    stp = poly.polynomial.operations[0][1]
+    count_l = jnp.zeros(prmaxl)
+    for path in stp.paths:
+        count_l = count_l.at[path.indices[3]].add(1)
+    return stp.num_paths, count_l
+
+
+def orbital_index_l(max_l):
+    index_l = jnp.arange(max_l * max_l)
+    for l in range(max_l):
+        index_l = index_l.at[l * l : (l + 1) * (l + 1)].set(l)
+    return index_l
+
+
+def density_cg(index_l):
+    return jnp.reciprocal(jnp.sqrt(2.0 * index_l + 1.0))
+
+
+def diagonal_channel_weights(l_coeff, nwave):
+    # l_coeff: (num_paths, num_nodes, nwave)
+    l_coeff = jnp.moveaxis(l_coeff, 1, 0)
+    num_nodes, num_paths, _ = l_coeff.shape
+    weights = jnp.zeros((num_nodes, num_paths, nwave, nwave, nwave), dtype=l_coeff.dtype)
+    channel = jnp.arange(nwave)
+    weights = weights.at[:, :, channel, channel, channel].set(l_coeff)
+    return weights.reshape(num_nodes, num_paths * nwave * nwave * nwave)
+
+
+def tensor_product(poly, init_orb, iter_orb, l_coeff, rmaxl, prmaxl, nwave, dtype):
+    num_nodes = init_orb.shape[0]
+    weights = diagonal_channel_weights(l_coeff, nwave)
+
+    weight_rep = cuex.RepArray(poly.inputs[0], weights, LAYOUT)
+    init_rep = cuex.RepArray(
+        parity_irreps(rmaxl, nwave),
+        init_orb.reshape(num_nodes, rmaxl * rmaxl * nwave),
+        LAYOUT,
+    )
+    iter_rep = cuex.RepArray(
+        parity_irreps(prmaxl, nwave),
+        iter_orb.reshape(num_nodes, prmaxl * prmaxl * nwave),
+        LAYOUT,
+    )
+
+    output = cuex.equivariant_polynomial(
+        poly,
+        [weight_rep, init_rep, iter_rep],
+        method="naive",
+        math_dtype=jnp.dtype(dtype).name,
+    )
+    return output.array.reshape(num_nodes, prmaxl * prmaxl, nwave)
