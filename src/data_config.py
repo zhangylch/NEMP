@@ -16,12 +16,7 @@ class ModelConfig:
     com_spec: Any = field(default=None, metadata={'pytree': True})
     count_l: Any = field(default=None, metadata={'pytree': True})
     index_l: Any = field(default=None, metadata={'pytree': True})
-    index_i1: Any = field(default=None, metadata={'pytree': True})
-    index_i2: Any = field(default=None, metadata={'pytree': True})
     ens_cg: Any = field(default=None, metadata={'pytree': True})
-    index_add: Any = field(default=None, metadata={'pytree': True})
-    index_den: Any = field(default=None, metadata={'pytree': True})
-    index_squ: Any = field(default=None, metadata={'pytree': True})
     initbias_neigh: Any = field(default=None, metadata={'pytree': True})
     use_norm: bool=False
     use_bias: bool=False
