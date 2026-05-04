@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
 from collections.abc import Mapping
-from low_level import cueq_tp, sph_cal
+from low_level import cueq_tp
 from src.data_config import ModelConfig
 from low_level import MLP
 
@@ -26,7 +26,6 @@ class MPNNCore(nnx.Module):
         self.config = config
         dtype = config.initbias_neigh.dtype
 
-        self.sph_cal = sph_cal.SPH_CAL(max_l=config.rmaxl - 1)
         self.tp_polynomial = nnx.static(
             cueq_tp.tensor_product_descriptor(config.rmaxl, config.prmaxl, config.nwave)
         )
@@ -197,10 +196,12 @@ class MPNNCore(nnx.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        sph = self.sph_cal(distvec.T / distances)
-        sph_norm = segment_sum(jnp.square(sph), self.config.index_l, num_segments=rmaxl_i, indices_are_sorted=True)
-        sph_norm = sph_norm + eps
-        sph = sph / jnp.sqrt(sph_norm[self.config.index_l]) * jnp.sqrt(dtype_2 * self.config.index_l[:, None] + dtype_1)
+        sph = cueq_tp.normalized_spherical_harmonics(
+            rmaxl_i,
+            distvec / distances[:, None],
+            self.config.index_l,
+            eps,
+        )
 
         norm_dist = distances / cutoff_f
         dist_pow = jnp.power(norm_dist, pn_f)
