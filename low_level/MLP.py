@@ -29,7 +29,7 @@ class ScaledDense(nnx.Module):
         scale = cst / math.sqrt(in_features)
         if use_bias:
             scale = scale / 1e2
-        self.scale = float(scale)
+        self.scale = jnp.array(scale, dtype=self.dtype)
 
         self.kernel = nnx.Param(
             nnx.initializers.normal(1.0)(rngs.params(), (in_features, features), dtype)
@@ -47,13 +47,10 @@ class ScaledDense(nnx.Module):
             self.bias = nnx.Param(bias)
 
     def __call__(self, x):
-        assert x.shape[-1] == self.in_features, (
-            f"Input shape {x.shape} does not match layer's in_features {self.in_features}"
-        )
 
-        out = x @ (self.kernel[...] * jnp.array(self.scale, dtype=self.dtype))
+        out = x @ (self.kernel * self.scale)
         if self.use_bias:
-            out += self.bias[...]
+            out += self.bias
         return out
 
 
@@ -74,37 +71,31 @@ class ResidualBlock(nnx.Module):
         self.layers_per_block = layers_per_block
         self.dtype = dtype
 
-        for i in range(layers_per_block):
-            setattr(
-                self,
-                f"layer_{i}",
-                ScaledDense(
-                    in_features=features,
-                    features=features,
-                    cst=cst,
-                    use_bias=use_bias,
-                    dtype=dtype,
-                    rngs=rngs,
-                ),
+        self.layers = nnx.ModuleList([
+            ScaledDense(
+                in_features=features,
+                features=features,
+                cst=cst,
+                use_bias=use_bias,
+                dtype=dtype,
+                rngs=rngs,
             )
+            for _ in range(layers_per_block)
+        ])
+        self.sqrt_2 = jnp.sqrt(jnp.array(2.0, dtype=self.dtype))
+
 
     def __call__(self, x):
         residual = x
 
-        for i in range(self.layers_per_block):
+        for layer in self.layers:
             x = jax.nn.silu(x)
-            x = getattr(self, f"layer_{i}")(x)
+            x = layer(x)
 
-        sqrt_2 = jnp.sqrt(jnp.array(2.0, dtype=self.dtype))
-        x = (x + residual) / sqrt_2
+        x = (x + residual) / self.sqrt_2
         return x
 
-
 class MLP(nnx.Module):
-    """
-    A Multi-Layer Perceptron using Flax NNX.
-    """
-
     def __init__(
         self,
         in_features: int,
@@ -138,19 +129,17 @@ class MLP(nnx.Module):
                 rngs=rngs,
             )
 
-            for i in range(num_blocks):
-                setattr(
-                    self,
-                    f"block_{i}",
-                    ResidualBlock(
-                        features=features,
-                        layers_per_block=layers_per_block,
-                        cst=cst,
-                        use_bias=use_bias,
-                        dtype=dtype,
-                        rngs=rngs,
-                    ),
+            self.blocks = nnx.ModuleList([
+                ResidualBlock(
+                    features=features,
+                    layers_per_block=layers_per_block,
+                    cst=cst,
+                    use_bias=use_bias,
+                    dtype=dtype,
+                    rngs=rngs,
                 )
+                for _ in range(num_blocks)
+            ])
 
             output_in_features = features
         else:
@@ -169,8 +158,10 @@ class MLP(nnx.Module):
     def __call__(self, x):
         if not self.use_linear:
             x = self.input_layer(x)
-            for i in range(self.num_blocks):
-                x = getattr(self, f"block_{i}")(x)
+
+            for block in self.blocks:
+                x = block(x)
+
             x = jax.nn.silu(x)
 
         return self.output_layer(x)
