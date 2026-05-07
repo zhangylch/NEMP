@@ -37,7 +37,7 @@ class MPNNCore(nnx.Module):
         self.contract_coeff = nnx.Param(
             nnx.initializers.normal(1.0)(
                 rngs.params(),
-                (config.MP_loop, config.nspec, 3, config.nwave, config.nwave),
+                (config.MP_loop, config.nspec, config.nwave, config.nwave),
                 dtype,
             )
         )
@@ -258,7 +258,7 @@ class MPNNCore(nnx.Module):
             density = jnp.concatenate((density, density1), axis=1)
 
             orb_coeff = self.MPNN_list[iter_loop](ead).reshape(-1, prmaxl_i + rmaxl_i, self.config.nwave)
-            contract_coeff_iter = (self.contract_coeff[...] / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
+            contract_coeff_iter = (self.contract_coeff / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
 
             center_orbital = self.sum_interaction(
                 nnode=nnode,
@@ -294,8 +294,7 @@ class MPNNCore(nnx.Module):
         return jnp.sum(graph_ene), graph_ene
 
     def sum_interaction(self, nnode, prmaxl_i, center_orbital, contract_coeff, tp_layer, spec_indices, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
-        corbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 0])
-        iter_orb = segment_sum(corbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=nnode, indices_are_sorted=True)
+        iter_orb = segment_sum(center_orbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
         worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
@@ -307,9 +306,9 @@ class MPNNCore(nnx.Module):
             self.config.initbias_neigh.dtype,
         )
         norm = ave_neigh * ave_neigh
-        iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
+        iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb)
 
-        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 2])
+        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff)
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital

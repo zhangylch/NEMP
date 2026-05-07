@@ -51,9 +51,9 @@ class ScaledDense(nnx.Module):
             f"Input shape {x.shape} does not match layer's in_features {self.in_features}"
         )
 
-        out = x @ (self.kernel[...] * jnp.array(self.scale, dtype=self.dtype))
+        out = x @ (self.kernel * jnp.array(self.scale, dtype=self.dtype))
         if self.use_bias:
-            out += self.bias[...]
+            out += self.bias
         return out
 
 
