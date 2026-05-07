@@ -306,7 +306,7 @@ class MPNNCore(nnx.Module):
             self.config.initbias_neigh.dtype,
         )
         norm = ave_neigh * ave_neigh
-        iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb)
+        iter_orb = jnp.einsum("ij, ijk -> ijk", jnp.reciprocal(norm), iter_orb)
 
         center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff)
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)

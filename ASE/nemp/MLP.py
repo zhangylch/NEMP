@@ -74,10 +74,8 @@ class ResidualBlock(nnx.Module):
         self.layers_per_block = layers_per_block
         self.dtype = dtype
 
-        for i in range(layers_per_block):
-            setattr(
-                self,
-                f"layer_{i}",
+        self.layers = nnx.List(
+            [
                 ScaledDense(
                     in_features=features,
                     features=features,
@@ -85,15 +83,17 @@ class ResidualBlock(nnx.Module):
                     use_bias=use_bias,
                     dtype=dtype,
                     rngs=rngs,
-                ),
-            )
+                )
+                for _ in range(layers_per_block)
+            ]
+        )
 
     def __call__(self, x):
         residual = x
 
-        for i in range(self.layers_per_block):
+        for layer in self.layers:
             x = jax.nn.silu(x)
-            x = getattr(self, f"layer_{i}")(x)
+            x = layer(x)
 
         sqrt_2 = jnp.sqrt(jnp.array(2.0, dtype=self.dtype))
         x = (x + residual) / sqrt_2
@@ -138,10 +138,8 @@ class MLP(nnx.Module):
                 rngs=rngs,
             )
 
-            for i in range(num_blocks):
-                setattr(
-                    self,
-                    f"block_{i}",
+            self.blocks = nnx.List(
+                [
                     ResidualBlock(
                         features=features,
                         layers_per_block=layers_per_block,
@@ -149,8 +147,10 @@ class MLP(nnx.Module):
                         use_bias=use_bias,
                         dtype=dtype,
                         rngs=rngs,
-                    ),
-                )
+                    )
+                    for _ in range(num_blocks)
+                ]
+            )
 
             output_in_features = features
         else:
@@ -169,8 +169,8 @@ class MLP(nnx.Module):
     def __call__(self, x):
         if not self.use_linear:
             x = self.input_layer(x)
-            for i in range(self.num_blocks):
-                x = getattr(self, f"block_{i}")(x)
+            for block in self.blocks:
+                x = block(x)
             x = jax.nn.silu(x)
 
         return self.output_layer(x)
