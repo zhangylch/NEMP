@@ -26,6 +26,5 @@ key = jax.random.PRNGKey(full_config.seed)
 key = jax.random.split(key, 2)
 
 index_l = cueq_tp.orbital_index_l(rmaxl)
-ens_cg = cueq_tp.density_cg(index_l)
 
 initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.01

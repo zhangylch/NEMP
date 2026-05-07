@@ -14,7 +14,6 @@ class ModelConfig:
     reduce_spec: Any = field(default=None, metadata={'pytree': True})
     com_spec: Any = field(default=None, metadata={'pytree': True})
     index_l: Any = field(default=None, metadata={'pytree': True})
-    ens_cg: Any = field(default=None, metadata={'pytree': True})
     initbias_neigh: Any = field(default=None, metadata={'pytree': True})
     use_norm: bool=False
     use_bias: bool=False

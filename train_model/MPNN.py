@@ -185,7 +185,7 @@ class MPNNCore(nnx.Module):
         prmaxl_f = jnp.array(prmaxl_i, dtype=dtype)
         nwave_f = jnp.array(nwave_i, dtype=dtype)
         cutoff_f = jnp.array(self.config.cutoff, dtype=dtype)
-        pn_f = jnp.array(self.config.pn, dtype)
+        pn_f = jnp.array(self.config.pn, dtype=dtype)
         dtype_1 = jnp.array(1.0, dtype=dtype)
         dtype_2 = jnp.array(2.0, dtype=dtype)
         dtype_3 = jnp.array(3.0, dtype=dtype)
@@ -239,6 +239,7 @@ class MPNNCore(nnx.Module):
         density = segment_sum(wradial[:, -2], neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
         pindex_l = self.config.index_l[:pnorb_i]
+        density_norm = jnp.reciprocal(jnp.sqrt(dtype_2 * pindex_l.astype(dtype) + dtype_1))
         worbital = jnp.einsum("ijk, ji -> ijk", wradial[:, pindex_l], sph[:pnorb_i])
         center_orbital = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
         center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff[...] / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
@@ -246,7 +247,7 @@ class MPNNCore(nnx.Module):
         radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
-            norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f))
+            norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f))
             add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
             norm_ead = jnp.einsum("ji, ijk -> ik", sph[:pnorb_i], add_orb) / jnp.sqrt(dtype_2)
             ead = jnp.concatenate((ead, norm_ead), axis=1)
@@ -279,7 +280,7 @@ class MPNNCore(nnx.Module):
                 norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f * nwave_f)
                 center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
 
-        norm_corb = center_orbital * (self.config.ens_cg[:pnorb_i, None] / jnp.sqrt(prmaxl_f * dtype_3))
+        norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f * dtype_3))
         orbital = jnp.einsum("iljk, ji -> ijk", radial[:, :, pindex_l], sph[:pnorb_i])
         sum_orb = segment_sum(orbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)

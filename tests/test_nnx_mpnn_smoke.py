@@ -17,7 +17,6 @@ def _minimal_config():
         reduce_spec=jnp.array([1], dtype=dtype),
         com_spec=jnp.array([[1.0, 1.0]], dtype=dtype),
         index_l=jnp.array([0, 1, 1, 1]),
-        ens_cg=jnp.array([1.0], dtype=dtype),
         initbias_neigh=jnp.array([0.5, 1.5], dtype=dtype),
         use_norm=False,
         use_bias=False,
