@@ -1,6 +1,7 @@
 import cuequivariance as cue
 import cuequivariance_jax as cuex
 import jax.numpy as jnp
+from flax import nnx
 from jax.ops import segment_sum
 
 
@@ -12,12 +13,25 @@ def parity_irreps(max_l, nwave):
     return cue.Irreps("O3", " + ".join(terms))
 
 
-def tensor_product_descriptor(rmaxl, prmaxl, nwave):
-    return cue.descriptors.fully_connected_tensor_product(
+def tensor_product_descriptor(rmaxl, prmaxl, nwave, normalize=True):
+    descriptor = cue.descriptors.fully_connected_tensor_product(
         parity_irreps(rmaxl, nwave),
         parity_irreps(prmaxl, nwave),
         parity_irreps(prmaxl, nwave),
     )
+    if normalize:
+        operation, stp = descriptor.polynomial.operations[0]
+        polynomial = cue.SegmentedPolynomial(
+            descriptor.polynomial.inputs,
+            descriptor.polynomial.outputs,
+            [(operation, stp.normalize_paths_for_operand(1))],
+        )
+        descriptor = cue.EquivariantPolynomial(
+            descriptor.inputs,
+            descriptor.outputs,
+            polynomial,
+        )
+    return descriptor
 
 
 def tensor_product_path_metadata(rmaxl, prmaxl, nwave):
@@ -67,8 +81,7 @@ def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
     return sph / jnp.sqrt(sph_norm[index_l]) * jnp.sqrt(2.0 * l_value[:, None] + 1.0)
 
 
-def diagonal_channel_weights(l_coeff, nwave):
-    # l_coeff: (num_paths, num_nodes, nwave)
+def _diagonal_channel_weights(l_coeff, nwave):
     l_coeff = jnp.moveaxis(l_coeff, 1, 0)
     num_nodes, num_paths, _ = l_coeff.shape
     weights = jnp.zeros((num_nodes, num_paths, nwave, nwave, nwave), dtype=l_coeff.dtype)
@@ -77,26 +90,45 @@ def diagonal_channel_weights(l_coeff, nwave):
     return weights.reshape(num_nodes, num_paths * nwave * nwave * nwave)
 
 
-def tensor_product(poly, init_orb, iter_orb, l_coeff, rmaxl, prmaxl, nwave, dtype):
-    num_nodes = init_orb.shape[0]
-    weights = diagonal_channel_weights(l_coeff, nwave)
+class RadialMixedTP(nnx.Module):
+    def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, *, rngs):
+        self.nwave = nnx.static(nwave)
+        self.rmaxl = nnx.static(rmaxl)
+        self.prmaxl = nnx.static(prmaxl)
+        self.init_irreps = nnx.static(parity_irreps(rmaxl, nwave))
+        self.iter_irreps = nnx.static(parity_irreps(prmaxl, nwave))
+        self.descriptor = nnx.static(tensor_product_descriptor(rmaxl, prmaxl, nwave))
 
-    weight_rep = cuex.RepArray(poly.inputs[0], weights, LAYOUT)
-    init_rep = cuex.RepArray(
-        parity_irreps(rmaxl, nwave),
-        init_orb.reshape(num_nodes, rmaxl * rmaxl * nwave),
-        LAYOUT,
-    )
-    iter_rep = cuex.RepArray(
-        parity_irreps(prmaxl, nwave),
-        iter_orb.reshape(num_nodes, prmaxl * prmaxl * nwave),
-        LAYOUT,
-    )
+        stp = self.descriptor.polynomial.operations[0][1]
+        self.num_paths = nnx.static(stp.num_paths)
+        self.weights = nnx.Param(
+            nnx.initializers.normal(1.0)(
+                rngs.params(),
+                (stp.num_paths, nspec, nwave),
+                dtype,
+            )
+        )
 
-    output = cuex.equivariant_polynomial(
-        poly,
-        [weight_rep, init_rep, iter_rep],
-        method="naive",
-        math_dtype=jnp.dtype(dtype).name,
-    )
-    return output.array.reshape(num_nodes, prmaxl * prmaxl, nwave)
+    def __call__(self, init_orb, iter_orb, spec_indices, dtype):
+        num_nodes = init_orb.shape[0]
+        weights = _diagonal_channel_weights(self.weights[...][:, spec_indices], self.nwave)
+
+        weight_rep = cuex.RepArray(self.descriptor.inputs[0], weights, LAYOUT)
+        init_rep = cuex.RepArray(
+            self.init_irreps,
+            init_orb.reshape(num_nodes, self.rmaxl * self.rmaxl * self.nwave),
+            LAYOUT,
+        )
+        iter_rep = cuex.RepArray(
+            self.iter_irreps,
+            iter_orb.reshape(num_nodes, self.prmaxl * self.prmaxl * self.nwave),
+            LAYOUT,
+        )
+
+        output = cuex.equivariant_polynomial(
+            self.descriptor,
+            [weight_rep, init_rep, iter_rep],
+            method="naive",
+            math_dtype=jnp.dtype(dtype).name,
+        )
+        return output.array.reshape(num_nodes, self.prmaxl * self.prmaxl, self.nwave)
