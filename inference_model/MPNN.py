@@ -26,10 +26,6 @@ class MPNNCore(nnx.Module):
         self.config = config
         dtype = config.initbias_neigh.dtype
 
-        self.tp_polynomial = nnx.static(
-            cueq_tp.tensor_product_descriptor(config.rmaxl, config.prmaxl, config.nwave)
-        )
-
         self.scale = nnx.Param(
             jnp.array(np.array([1.0, 0.0] * config.nspec), dtype=dtype)
         )
@@ -45,13 +41,17 @@ class MPNNCore(nnx.Module):
                 dtype,
             )
         )
-        self.l_coeff = nnx.Param(
-            nnx.initializers.normal(1.0)(
-                rngs.params(),
-                (config.MP_loop, config.num_cg, config.nspec, config.nwave),
+        self.tp_layers = nnx.List([
+            cueq_tp.RadialMixedTP(
+                config.nspec,
+                config.nwave,
+                config.rmaxl,
+                config.prmaxl,
                 dtype,
+                rngs=rngs,
             )
-        )
+            for _ in range(config.MP_loop)
+        ])
 
         com_spec_features = config.com_spec.shape[-1]
         self.neighcoeffnn = MLP.MLP(
@@ -244,15 +244,14 @@ class MPNNCore(nnx.Module):
 
             orb_coeff = self.MPNN_list[iter_loop](ead).reshape(-1, prmaxl_i + rmaxl_i, self.config.nwave)
             contract_coeff_iter = (self.contract_coeff[...] / jnp.sqrt(nwave_f))[iter_loop, spec_indices]
-            l_coeff_iter = self.l_coeff[...][iter_loop]
 
             center_orbital = self.sum_interaction(
                 numatom=numatom,
                 prmaxl_i=prmaxl_i,
-                nwave_i=nwave_i,
                 center_orbital=center_orbital,
                 contract_coeff=contract_coeff_iter,
-                l_coeff=l_coeff_iter[:, spec_indices],
+                tp_layer=self.tp_layers[iter_loop],
+                spec_indices=spec_indices,
                 orb_coeff=orb_coeff,
                 neighlist=neighlist,
                 ave_neigh=ave_neigh,
@@ -279,24 +278,20 @@ class MPNNCore(nnx.Module):
 
         return jnp.sum(atomic_ene * center_factor) * jnp.array(self.config.std, dtype=dtype)
 
-    def sum_interaction(self, numatom, prmaxl_i, nwave_i, center_orbital, contract_coeff, l_coeff, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
+    def sum_interaction(self, numatom, prmaxl_i, center_orbital, contract_coeff, tp_layer, spec_indices, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
         corbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 0])
         iter_orb = segment_sum(corbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
         worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        iter_orb = cueq_tp.tensor_product(
-            self.tp_polynomial,
+        iter_orb = tp_layer(
             init_orb,
             iter_orb,
-            l_coeff,
-            self.config.rmaxl,
-            prmaxl_i,
-            nwave_i,
+            spec_indices,
             self.config.initbias_neigh.dtype,
         )
-        norm = ave_neigh * ave_neigh * jnp.sqrt(self.config.count_l[pindex_l])
+        norm = ave_neigh * ave_neigh
         iter_orb = jnp.einsum("ij, ijk, ikm -> ijm", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 1])
 
         center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 2])

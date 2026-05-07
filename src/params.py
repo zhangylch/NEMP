@@ -27,12 +27,5 @@ key = jax.random.split(key, 2)
 
 index_l = cueq_tp.orbital_index_l(rmaxl)
 ens_cg = cueq_tp.density_cg(index_l)
-num_cg, count_l = cueq_tp.tensor_product_path_metadata(
-    rmaxl,
-    prmaxl,
-    full_config.nwave,
-)
 
 initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.01
-
-print("cueq tensor product path number: ", num_cg)

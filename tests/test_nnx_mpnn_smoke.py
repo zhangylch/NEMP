@@ -10,14 +10,12 @@ def _minimal_config():
     dtype = jnp.float32
     return ModelConfig(
         nspec=1,
-        num_cg=1,
         emb_nl=[0, 4, 1, False],
         MP_nl=[0, 4, 1, True],
         radial_nl=[0, 4, 1, True],
         out_nl=[0, 4, 1, True],
         reduce_spec=jnp.array([1], dtype=dtype),
         com_spec=jnp.array([[1.0, 1.0]], dtype=dtype),
-        count_l=jnp.array([1.0], dtype=dtype),
         index_l=jnp.array([0, 1, 1, 1]),
         ens_cg=jnp.array([1.0], dtype=dtype),
         initbias_neigh=jnp.array([0.5, 1.5], dtype=dtype),
