@@ -240,7 +240,7 @@ class MPNNCore(nnx.Module):
 
         pindex_l = self.config.index_l[:pnorb_i]
         density_norm = jnp.reciprocal(jnp.sqrt(dtype_2 * pindex_l.astype(dtype) + dtype_1))
-        worbital = jnp.einsum("ijk, ji -> ijk", wradial[:, pindex_l], sph[:pnorb_i])
+        worbital = jnp.einsum("ijk, ij -> ijk", wradial[:, pindex_l], sph[:, :pnorb_i])
         center_orbital = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
         center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff[...] / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
 
@@ -249,10 +249,10 @@ class MPNNCore(nnx.Module):
         for iter_loop in range(self.config.MP_loop):
             norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f))
             add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
-            norm_ead = jnp.einsum("ji, ijk -> ik", sph[:pnorb_i], add_orb) / jnp.sqrt(dtype_2)
+            norm_ead = jnp.einsum("ij, ijk -> ik", sph[:, :pnorb_i], add_orb) / jnp.sqrt(dtype_2)
             ead = jnp.concatenate((ead, norm_ead), axis=1)
 
-            orbital = jnp.einsum("ijk, ji -> ijk", radial[:, 2, pindex_l], sph[:pnorb_i])
+            orbital = jnp.einsum("ijk, ij -> ijk", radial[:, 2, pindex_l], sph[:, :pnorb_i])
             sum_orb = segment_sum(orbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
             density1 = jnp.sum(sum_orb * norm_corb, axis=1)
             density = jnp.concatenate((density, density1), axis=1)
@@ -281,7 +281,7 @@ class MPNNCore(nnx.Module):
                 center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
 
         norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f * dtype_3))
-        orbital = jnp.einsum("iljk, ji -> ijk", radial[:, :, pindex_l], sph[:pnorb_i])
+        orbital = jnp.einsum("iljk, ij -> ijk", radial[:, :, pindex_l], sph[:, :pnorb_i])
         sum_orb = segment_sum(orbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)
         density = jnp.concatenate((density, density1), axis=1)
@@ -296,7 +296,7 @@ class MPNNCore(nnx.Module):
     def sum_interaction(self, nnode, prmaxl_i, center_orbital, contract_coeff, tp_layer, spec_indices, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
         iter_orb = segment_sum(center_orbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
-        worbital = jnp.einsum("ijk, ji ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
+        worbital = jnp.einsum("ijk, ij ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
 
         iter_orb = tp_layer(

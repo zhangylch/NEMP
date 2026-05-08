@@ -78,7 +78,7 @@ def test_radial_mixed_tp_uses_two_input_channel_weight_axes():
     assert tp.weight_dim == tp.num_paths * nwave * nwave
 
 
-def test_cueq_spherical_harmonics_uses_nemp_layout():
+def test_cueq_spherical_harmonics_uses_native_layout():
     vectors = jnp.array(
         [
             [1.0, 0.0, 0.0],
@@ -101,17 +101,13 @@ def test_cueq_spherical_harmonics_uses_nemp_layout():
 
     expected = jnp.array(
         [
-            [1.0, 1.0, 1.0, 1.0],
-            [0.0, 1.7320508, 0.0, 0.9258201],
-            [0.0, 0.0, 1.7320508, 1.38873],
-            [1.7320508, 0.0, 0.0, 0.4629101],
-            [0.0, 0.0, 0.0, 0.5532834],
-            [0.0, 0.0, 0.0, 1.65985],
-            [-1.118034, -1.118034, 2.236068, 1.0381744],
-            [0.0, 0.0, 0.0, 0.829925],
-            [1.9364917, -1.9364917, 0.0, -0.4149625],
+            [1.0, 1.7320508, 0.0, 0.0, 0.0, 0.0, -1.118034, 0.0, -1.9364917],
+            [1.0, 0.0, 1.7320508, 0.0, 0.0, 0.0, 2.236068, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 1.7320508, 0.0, 0.0, -1.118034, 0.0, 1.9364917],
+            [1.0, 0.46291003, 0.92582005, 1.38873, 0.82992494, 0.55328333, -0.15971905, 1.6598499, 1.1065665],
         ],
         dtype=jnp.float32,
     )
 
+    assert sph.shape == (vectors.shape[0], 9)
     assert jnp.allclose(sph, expected, atol=3e-6, rtol=3e-6)
