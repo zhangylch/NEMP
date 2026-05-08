@@ -281,7 +281,7 @@ class MPNNCore(nnx.Module):
                 norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f * nwave_f)
                 center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
 
-        norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f * dtype_3))
+        norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(dtype_3))
         orbital = jnp.einsum("iljk, ij -> ijk", radial[:, :, pindex_l], sph[:, :pnorb_i])
         sum_orb = segment_sum(orbital, neighlist[0], num_segments=nnode, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)

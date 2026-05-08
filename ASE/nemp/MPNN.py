@@ -268,7 +268,7 @@ class MPNNCore(nnx.Module):
 
             radial = self.ead_list[iter_loop](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
-        norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f * dtype_3))
+        norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(dtype_3))
         orbital = jnp.einsum("iljk, ij -> ijk", radial[:, :, pindex_l], sph[:, :pnorb_i])
         sum_orb = segment_sum(orbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)
