@@ -78,6 +78,30 @@ def test_radial_mixed_tp_uses_two_input_channel_weight_axes():
     assert tp.weight_dim == tp.num_paths * nwave * nwave
 
 
+def test_radial_mixed_tp_accepts_configured_methods():
+    tp_native = cueq_tp.RadialMixedTP(
+        nspec=1,
+        nwave=2,
+        rmaxl=2,
+        prmaxl=2,
+        dtype=jnp.float32,
+        tp_method="native",
+        rngs=nnx.Rngs(0),
+    )
+    tp_uniform = cueq_tp.RadialMixedTP(
+        nspec=1,
+        nwave=2,
+        rmaxl=2,
+        prmaxl=2,
+        dtype=jnp.float32,
+        tp_method="uniform_1D",
+        rngs=nnx.Rngs(0),
+    )
+
+    assert tp_native.tp_method == "naive"
+    assert tp_uniform.tp_method == "uniform_1d"
+
+
 def test_cueq_spherical_harmonics_uses_native_layout():
     vectors = jnp.array(
         [

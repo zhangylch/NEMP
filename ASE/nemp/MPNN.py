@@ -37,7 +37,7 @@ class MPNNCore(nnx.Module):
         self.contract_coeff = nnx.Param(
             nnx.initializers.normal(1.0)(
                 rngs.params(),
-                (config.MP_loop, config.nspec, config.nwave, config.nwave),
+                (config.MP_loop, config.nspec, 2, config.nwave, config.nwave),
                 dtype,
             )
         )
@@ -48,6 +48,7 @@ class MPNNCore(nnx.Module):
                 config.rmaxl,
                 config.prmaxl,
                 dtype,
+                config.tp_method,
                 rngs=rngs,
             )
             for _ in range(config.MP_loop)
@@ -225,15 +226,15 @@ class MPNNCore(nnx.Module):
         density = segment_sum(wradial[:, -2], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
         pindex_l = self.config.index_l[:pnorb_i]
-        density_norm = jnp.reciprocal(jnp.sqrt(dtype_2 * pindex_l.astype(dtype) + dtype_1))
+        density_norm = jnp.reciprocal(jnp.sqrt((dtype_2 * pindex_l.astype(dtype) + dtype_1) * prmaxl_f))
         worbital = jnp.einsum("ijk, ij -> ijk", wradial[:, pindex_l], sph[:, :pnorb_i])
         center_orbital = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
-        center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff[...] / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
+        center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
 
         radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
-            norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(prmaxl_f))
+            norm_corb = center_orbital * density_norm[:, None]
             add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
             norm_ead = jnp.einsum("ij, ijk -> ik", sph[:, :pnorb_i], add_orb) / jnp.sqrt(dtype_2)
             ead = jnp.concatenate((ead, norm_ead), axis=1)
@@ -292,9 +293,9 @@ class MPNNCore(nnx.Module):
             self.config.initbias_neigh.dtype,
         )
         norm = ave_neigh * ave_neigh
-        iter_orb = jnp.einsum("ij, ijk -> ijk", jnp.reciprocal(norm), iter_orb)
+        iter_orb = jnp.einsum("ij, ijk, ikn -> ijn", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 0])
 
-        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff)
+        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 1])
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital

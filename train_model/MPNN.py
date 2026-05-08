@@ -48,6 +48,7 @@ class MPNNCore(nnx.Module):
                 config.rmaxl,
                 config.prmaxl,
                 dtype,
+                config.tp_method,
                 rngs=rngs,
             )
             for _ in range(config.MP_loop)
@@ -306,9 +307,9 @@ class MPNNCore(nnx.Module):
             self.config.initbias_neigh.dtype,
         )
         norm = ave_neigh * ave_neigh
-        iter_orb = jnp.einsum("ij, ijk, ijkn -> ijn", jnp.reciprocal(norm), iter_orb, contract_coeff[:, :, 0])
+        iter_orb = jnp.einsum("ij, ijk, ikn -> ijn", jnp.reciprocal(norm), iter_orb, contract_coeff[:, 0])
 
-        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, :, 1])
+        center_orbital = jnp.einsum("ijk, ikm -> ijm", center_orbital, contract_coeff[:, 1])
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital

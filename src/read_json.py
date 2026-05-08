@@ -54,6 +54,7 @@ class JsonConfig:
     nradial: int = field(default=64)
     maxneigh_per_node: int = field(default=26)
     MP_loop: int = field(default=3)
+    tp_method: str = field(default='native')
     
     emb_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])
     radial_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])
