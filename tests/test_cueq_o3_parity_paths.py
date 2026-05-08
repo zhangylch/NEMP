@@ -1,5 +1,6 @@
 import cuequivariance as cue
 from flax import nnx
+import jax
 import jax.numpy as jnp
 
 from low_level import cueq_tp
@@ -100,6 +101,26 @@ def test_radial_mixed_tp_accepts_configured_methods():
 
     assert tp_native.tp_method == "naive"
     assert tp_uniform.tp_method == "uniform_1d"
+
+
+def test_radial_mixed_tp_uniform_1d_forward():
+    tp = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=4,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="uniform_1D",
+        rngs=nnx.Rngs(0),
+    )
+
+    init_orb = jax.random.normal(jax.random.key(1), (5, 9, 4), dtype=jnp.float32)
+    iter_orb = jax.random.normal(jax.random.key(2), (5, 9, 4), dtype=jnp.float32)
+    spec_indices = jnp.array([0, 1, 0, 1, 0])
+    out = tp(init_orb, iter_orb, spec_indices, jnp.float32)
+
+    assert out.shape == (5, 9, 4)
+    assert out.dtype == jnp.float32
 
 
 def test_cueq_spherical_harmonics_uses_native_layout():

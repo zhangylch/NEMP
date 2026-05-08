@@ -20,7 +20,7 @@ if full_config.jnp_dtype=='float64':
 if full_config.jnp_dtype=='float32':
     jax.config.update("jax_default_matmul_precision", "highest")
 
-data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
 # generate random data for initialization
 
 #ntrain = data_load.ntrain
@@ -30,7 +30,10 @@ nforce = np.sum(numatoms) * 3
 
 nprop = 1
 prop_length = full_config.ntrain
-if full_config.force_table:
+if full_config.stress_table:
+    nprop = 3
+    prop_length = jnp.array(np.array([ntrain, nforce, full_config.ntrain*9]))
+elif full_config.force_table:
     nprop = 2
     prop_length = jnp.array(np.array([ntrain, nforce]))
 
@@ -52,7 +55,13 @@ config = ModelConfig(**model_config)
 model = MPNN.MPNN(config)
 
 
-if full_config.force_table:
+if full_config.stress_table:
+    def pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
+        ene, (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+        volume = jnp.sum(cell[0] * jnp.cross(cell[1], cell[2]))
+        return ene, force, stress/volume*jnp.array(full_config.stress_sign)
+    vmap_model = vmap(pes_model, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+elif full_config.force_table:
     vmap_model = vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
 else:
     def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):

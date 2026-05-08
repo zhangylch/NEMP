@@ -41,6 +41,8 @@ def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
 
 class RadialMixedTP(nnx.Module):
     def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, tp_method="native", *, rngs):
+        tp_method = normalize_tp_method(tp_method)
+
         def parity_irreps(max_l, mul):
             terms = [f"{mul}x{l}{'e' if l % 2 == 0 else 'o'}" for l in range(max_l)]
             return cue.Irreps("O3", " + ".join(terms))
@@ -72,15 +74,19 @@ class RadialMixedTP(nnx.Module):
                 dims={"u": nwave, "v": nwave},
             )
         stp = stp.normalize_paths_for_operand(1)
+        num_weight_paths = stp.num_paths
+        polynomial_stp = stp
+        if tp_method == "uniform_1d":
+            polynomial_stp = stp.flatten_modes(["u"], force=True)
 
         polynomial = cue.SegmentedPolynomial(
-            stp.operands[:3],
-            (stp.operands[3],),
-            [(cue.Operation((0, 1, 2, 3)), stp)],
+            polynomial_stp.operands[:3],
+            (polynomial_stp.operands[3],),
+            [(cue.Operation((0, 1, 2, 3)), polynomial_stp)],
         )
         descriptor = cue.EquivariantPolynomial(
             [
-                cue.IrrepsAndLayout(cue.Irreps("O3", f"{stp.operands[0].size}x0e"), LAYOUT),
+                cue.IrrepsAndLayout(cue.Irreps("O3", f"{polynomial_stp.operands[0].size}x0e"), LAYOUT),
                 cue.IrrepsAndLayout(init_irreps, LAYOUT),
                 cue.IrrepsAndLayout(iter_irreps, LAYOUT),
             ],
@@ -94,13 +100,13 @@ class RadialMixedTP(nnx.Module):
         self.init_irreps = nnx.static(init_irreps)
         self.iter_irreps = nnx.static(iter_irreps)
         self.descriptor = nnx.static(descriptor)
-        self.tp_method = nnx.static(normalize_tp_method(tp_method))
-        self.num_paths = nnx.static(stp.num_paths)
+        self.tp_method = nnx.static(tp_method)
+        self.num_paths = nnx.static(num_weight_paths)
         self.weight_dim = nnx.static(descriptor.inputs[0].dim)
         self.weights = nnx.Param(
             nnx.initializers.normal(1.0)(
                 rngs.params(),
-                (nspec, stp.num_paths, nwave, nwave),
+                (nspec, num_weight_paths, nwave, nwave),
                 dtype,
             )
         )

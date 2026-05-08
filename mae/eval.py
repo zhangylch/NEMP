@@ -20,7 +20,7 @@ if full_config.jnp_dtype=='float64':
 if full_config.jnp_dtype=='float32':
     jax.config.update("jax_default_matmul_precision", "highest")
 
-data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, key=full_config.seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
 # generate random data for initialization
 
 #ntrain = data_load.ntrain
