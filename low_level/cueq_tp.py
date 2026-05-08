@@ -100,15 +100,14 @@ class RadialMixedTP(nnx.Module):
         self.weights = nnx.Param(
             nnx.initializers.normal(1.0)(
                 rngs.params(),
-                (stp.num_paths, nspec, nwave, nwave),
+                (nspec, stp.num_paths, nwave, nwave),
                 dtype,
             )
         )
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
         num_nodes = init_orb.shape[0]
-        weights = jnp.moveaxis(self.weights[:, spec_indices], 1, 0)
-        weights = weights.reshape(num_nodes, self.weight_dim)
+        weights = self.weights[spec_indices].reshape(num_nodes, self.weight_dim)
 
         weight_rep = cuex.RepArray(self.descriptor.inputs[0], weights, LAYOUT)
         init_rep = cuex.RepArray(

@@ -74,7 +74,7 @@ def test_radial_mixed_tp_uses_two_input_channel_weight_axes():
         rngs=nnx.Rngs(0),
     )
 
-    assert tp.weights.shape == (tp.num_paths, nspec, nwave, nwave)
+    assert tp.weights.shape == (nspec, tp.num_paths, nwave, nwave)
     assert tp.weight_dim == tp.num_paths * nwave * nwave
 
 
