@@ -1,52 +1,53 @@
 {
-    "local_size": 2,
+    "local_size": 1,
     "force_table": true,
     "stress_table": false,
     "stress_sign": 1,
     "restart": false,
     "jnp_dtype": "float32",
-    "batchsize": 5,
-    "ncyc": 2,
-    "ntrain": 19960,
-    "Fshuffle": false,
+    "batchsize": 1,
+    "ncyc": 50,
+    "ntrain": 450,
+    "Fshuffle": true,
     "ene_shift": true,
     "initpot": 0.0,
     "init_weight": [
         1.0,
-        10.0
+        0.2
     ],
     "final_weight": [
         1.0,
-        0.1
+        0.2
     ],
     "queue_size": 2,
     "use_bias": false,
-    "use_norm": true,
+    "use_norm": false,
     "clip_norm": 0.1,
-    "seed": 20,
-    "data_seed": 20,
-    "pn": 6,
-    "npaircode": 128,
+    "seed": 40,
+    "data_seed": 50,
+    "pn": 1,
     "cross_val": false,
     "Epoch": 20000,
-    "warm_lr": 0.001,
-    "warm_epoch": 10,
-    "slr": 0.02,
-    "elr": 1e-5,
-    "patience_step": 40,
+    "warm_lr": 0.0001,
+    "warm_epoch": 100,
+    "slr": 0.1,
+    "elr": 1e-05,
+    "patience_step": 50,
     "cooldown": 0,
-    "decay_factor": 0.02,
-    "datafolder": "/users/ylz/jax/data/HME21/hme21.xyz",
-    "weight_decay": 1e-06,
+    "decay_factor": 0.5,
+    "datafolder": "/users/ylz/carc-scratch/data/3BPA/date/dataset_3BPA/train_300K.xyz",
+    "weight_decay": 1e-09,
     "cutoff": 6.0,
-    "max_l": 2,
-    "pmax_l": 2,
-    "nwave": 16,
-    "nradial": 16,
-    "maxneigh_per_node": 120,
-    "node_cap": 2.0,
-    "edge_cap": 2.0,
+    "node_cap": 1.0,
+    "edge_cap": 1.0,
+    "npaircode": 128,
+    "max_l": 3,
+    "pmax_l": 3,
+    "nwave": 64,
+    "nradial": 64,
+    "maxneigh_per_node": 26,
     "MP_loop": 3,
+    "tp_method": "native",
     "emb_nl": [
         2,
         128,
@@ -54,21 +55,21 @@
         false
     ],
     "radial_nl": [
-        2,
+        1,
         64,
         2,
-        false
+        true
     ],
     "MP_nl": [
-        2,
+        1,
         64,
-        2,
-        false
+        0,
+        true
     ],
     "out_nl": [
-        2,
-        128,
-        2,
-        false
+        1,
+        16,
+        0,
+        true
     ]
 }
