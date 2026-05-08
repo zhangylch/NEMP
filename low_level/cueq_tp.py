@@ -17,14 +17,14 @@ def orbital_index_l(max_l):
 def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
     vector_rep = cuex.RepArray(
         cue.Irreps("O3", "1o"),
-        vectors[:, [1, 2, 0]],
+        vectors,
         LAYOUT,
     )
     sph = cuex.spherical_harmonics(
         list(range(max_l)),
         vector_rep,
-        normalize=True,
-    ).array.T
+        normalize=False,
+    ).array
     return sph
 
 
