@@ -5,8 +5,8 @@ import pickle
 import math
 import time
 import numpy as np
-import train_model.MPNN as MPNN
 from src.params import *
+import train_model.MPNN as MPNN
 import dataloader.dataloader as dataloader
 import dataloader.cudaloader as cudaloader
 import src.print_info as print_info
@@ -19,6 +19,25 @@ from src.data_config import ModelConfig
 from dataclasses import replace, asdict
 import json
 from typing import Optional, Any
+
+
+def get_jax_devices(expected_local_size=None, log=False):
+    devices = jax.local_devices()
+    if log:
+        device_info = [
+            f"{device.id}:{device.platform}:{getattr(device, 'device_kind', 'unknown')}"
+            for device in devices
+        ]
+        print(f"JAX local devices ({len(devices)}): {device_info}", flush=True)
+        if not any(device.platform == "gpu" for device in devices):
+            print("WARNING: JAX did not find a GPU; training will run on CPU.", flush=True)
+    if expected_local_size is not None and len(devices) != expected_local_size:
+        raise RuntimeError(
+            "JAX local device count does not match config.local_size: "
+            f"{len(devices)} vs {expected_local_size}. Check CUDA_VISIBLE_DEVICES, "
+            "Slurm GPU allocation, and the installed JAX CUDA runtime."
+        )
+    return devices
 
 
 
@@ -68,7 +87,7 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             return loss_out, ploss_out
         return get_loss
 
-    devices = jax.local_devices()
+    devices = get_jax_devices(full_config.local_size)
     train_ens = jax.pmap(train_loop(ncyc), axis_name="train_GPUs")
     val_ens = jax.pmap(val_loop(ncyc), axis_name="val_GPUs")
 
@@ -174,6 +193,7 @@ elif full_config.force_table:
 final_weight = jnp.array(full_config.final_weight[:nprop])
 init_weight = jnp.array(full_config.init_weight[:nprop])
 
+get_jax_devices(full_config.local_size, log=True)
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
 for data in data_load:
     pass
@@ -293,7 +313,7 @@ ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
 
                                     
 start_step = 0
-devices = jax.local_devices()
+devices = get_jax_devices(full_config.local_size)
 params = jax.device_put_replicated(params, devices)
 ema_params = params
 opt_state = jax.device_put_replicated(opt_state, devices)

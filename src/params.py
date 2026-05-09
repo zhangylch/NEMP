@@ -1,13 +1,13 @@
-import jax
-import jax.numpy as jnp
-
 from src.read_json import load_config
 from src.gpu_sel import gpu_sel
-from low_level import cueq_tp
 
 
 full_config = load_config("config.json")
 gpu_sel(full_config.local_size)
+
+import jax
+import jax.numpy as jnp
+from low_level import cueq_tp
 
 jax.config.update("jax_debug_nans", True)
 

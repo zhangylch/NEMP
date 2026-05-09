@@ -13,12 +13,17 @@ class CudaDataLoader:
         self.idx = 0
         self.loader = loader
         self.queue = Queue(maxsize=queue_size)
-        self.worker = Thread(target=self.load_loop)
-        self.worker.setDaemon(True)
-        self.worker.start()
         self.val_train=0
         self.devices = jax.local_devices()
         self.num_devices = len(self.devices)
+        if self.num_devices != self.loader.local_size:
+            raise RuntimeError(
+                "CudaDataLoader device count does not match loader.local_size: "
+                f"{self.num_devices} vs {self.loader.local_size}. Check "
+                "config.local_size and CUDA_VISIBLE_DEVICES."
+            )
+        self.worker = Thread(target=self.load_loop, daemon=True)
+        self.worker.start()
 
     def load_loop(self):
         # The loop that will load into the queue in the background

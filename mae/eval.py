@@ -2,6 +2,12 @@
 
 import sys
 import numpy as np
+from src.read_json import load_config
+from src.gpu_sel import gpu_sel
+
+full_config = load_config("full_config.json")
+gpu_sel(1)
+
 import inference_model.MPNN as MPNN
 import dataloader_eval.dataloader as dataloader
 import dataloader_eval.cudaloader as cudaloader
@@ -10,10 +16,8 @@ from jax import vmap, jit
 import jax.numpy as jnp
 from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from src.data_config import ModelConfig
-from src.read_json import load_config
 
 # 示例：读取配置文件
-full_config = load_config("full_config.json")
 if full_config.jnp_dtype=='float64':
     jax.config.update("jax_enable_x64", True)
 
