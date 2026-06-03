@@ -16,6 +16,7 @@ from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from jax import vmap, jit
 from optax import tree_utils as otu
 from src.data_config import ModelConfig
+from src.jax_sharding import device_put_replicated
 from dataclasses import replace, asdict
 import json
 from typing import Optional, Any
@@ -96,21 +97,21 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
     best_loss = jnp.sum(jnp.array([1e20]))
 
    
-    scale = jax.device_put_replicated(warm_lr / slr, devices)
+    scale = device_put_replicated(warm_lr / slr, devices)
     max_scale =  slr / warm_lr
-    weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
-    init_weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
-    final_weight = jax.device_put_replicated(jnp.array(full_config.final_weight), devices)
-    ones_replicated = jax.device_put_replicated(jnp.array(1.0), devices)
+    weight = device_put_replicated(jnp.array(full_config.init_weight), devices)
+    init_weight = device_put_replicated(jnp.array(full_config.init_weight), devices)
+    final_weight = device_put_replicated(jnp.array(full_config.final_weight), devices)
+    ones_replicated = device_put_replicated(jnp.array(1.0), devices)
     for iepoch in range(Epoch): 
 
-        loss_train = jnp.zeros(full_config.local_size)
+        loss_train = device_put_replicated(jnp.array(0.0), devices)
         for data in data_load:
             params, opt_state, ema_params, loss_train = train_ens(params, opt_state, ema_params, scale, loss_train, weight, data)
         out_train = jnp.sqrt(jnp.sum(loss_train) / ntrain)
 
-        loss_val = jnp.zeros(full_config.local_size)
-        ploss_val = jnp.zeros((full_config.local_size, nprop))
+        loss_val = device_put_replicated(jnp.array(0.0), devices)
+        ploss_val = device_put_replicated(jnp.zeros((nprop,)), devices)
         for data in data_load:
             loss_val, ploss_val = val_ens(ema_params, scale, loss_val, ploss_val, weight, data)
         out_val = jnp.sqrt(jnp.sum(loss_val) / nval)
@@ -137,9 +138,9 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             
             if restored is not None:
                 start_step, params, ema_params, opt_state, _ = restored
-                params = jax.device_put_replicated(params, devices)
-                ema_params = jax.device_put_replicated(ema_params, devices)
-                opt_state = jax.device_put_replicated(opt_state, devices)
+                params = device_put_replicated(params, devices)
+                ema_params = device_put_replicated(ema_params, devices)
+                opt_state = device_put_replicated(opt_state, devices)
     
 
         if out_val < best_loss:
@@ -314,9 +315,9 @@ ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
                                     
 start_step = 0
 devices = get_jax_devices(full_config.local_size)
-params = jax.device_put_replicated(params, devices)
+params = device_put_replicated(params, devices)
 ema_params = params
-opt_state = jax.device_put_replicated(opt_state, devices)
+opt_state = device_put_replicated(opt_state, devices)
 if full_config.restart:
     restored = restore_checkpoint(
         full_config.ckpath, 
@@ -324,9 +325,9 @@ if full_config.restart:
     )
     
     start_step, params, ema_params, opt_state, _ = restored
-    params = jax.device_put_replicated(params, devices)
-    ema_params = jax.device_put_replicated(ema_params, devices)
-    opt_state = jax.device_put_replicated(opt_state, devices)
+    params = device_put_replicated(params, devices)
+    ema_params = device_put_replicated(ema_params, devices)
+    opt_state = device_put_replicated(opt_state, devices)
     
 
 

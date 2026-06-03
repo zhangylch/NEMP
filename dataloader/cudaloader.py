@@ -6,6 +6,7 @@ from queue import Queue
 import jax
 import jax.numpy as jnp
 import numpy as np
+from src.jax_sharding import device_put_sharded
 
 class CudaDataLoader:
 
@@ -79,4 +80,4 @@ class CudaDataLoader:
 
         # 步骤2: 使用 jax.device_put_sharded 创建一个 ShardedDeviceArray。
         # 这个函数是关键，它会保留数据的全局形状信息。
-        return jax.device_put_sharded(list_of_shards, self.devices)
+        return device_put_sharded(list_of_shards, self.devices)
