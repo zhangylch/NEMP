@@ -44,7 +44,8 @@ class RadialMixedTP(nnx.Module):
     def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, tp_method="native", *, rngs):
         tp_method = normalize_tp_method(tp_method)
         uniform_1d = tp_method == "uniform_1d"
-        layout = UNIFORM_LAYOUT if uniform_1d else LAYOUT
+        init_layout = UNIFORM_LAYOUT if uniform_1d else LAYOUT
+        iter_layout = LAYOUT
 
         def parity_irreps(max_l, mul):
             terms = [f"{mul}x{l}{'e' if l % 2 == 0 else 'o'}" for l in range(max_l)]
@@ -61,15 +62,15 @@ class RadialMixedTP(nnx.Module):
 
         # Operand 3 is the STP output; i,j,k are the CG coefficient axes.
         # u,v mix input channels and output reuses v.
-        # uniform_1d needs a single leading uniform mode; use channel-first
-        # segments there so flatten_modes("u") does not need force=True.
+        # uniform_1d flattens the init-channel mode. Keep coefficient modes
+        # first on the iter/output operands so cueq can flatten CG modes too.
         if uniform_1d:
-            stp = cue.SegmentedTensorProduct.from_subscripts("uv,ui,vj,vk+ijk")
+            stp = cue.SegmentedTensorProduct.from_subscripts("uv,ui,jv,kv+ijk")
             for l_value in range(rmaxl):
                 stp.add_segment(1, (nwave, 2 * l_value + 1))
             for l_value in range(prmaxl):
-                stp.add_segment(2, (nwave, 2 * l_value + 1))
-                stp.add_segment(3, (nwave, 2 * l_value + 1))
+                stp.add_segment(2, (2 * l_value + 1, nwave))
+                stp.add_segment(3, (2 * l_value + 1, nwave))
         else:
             stp = cue.SegmentedTensorProduct.from_subscripts("uv,iu,jv,kv+ijk")
             for l_value in range(rmaxl):
@@ -100,10 +101,10 @@ class RadialMixedTP(nnx.Module):
         descriptor = cue.EquivariantPolynomial(
             [
                 cue.IrrepsAndLayout(cue.Irreps("O3", f"{polynomial_stp.operands[0].size}x0e"), LAYOUT),
-                cue.IrrepsAndLayout(init_irreps, layout),
-                cue.IrrepsAndLayout(iter_irreps, layout),
+                cue.IrrepsAndLayout(init_irreps, init_layout),
+                cue.IrrepsAndLayout(iter_irreps, iter_layout),
             ],
-            [cue.IrrepsAndLayout(iter_irreps, layout)],
+            [cue.IrrepsAndLayout(iter_irreps, iter_layout)],
             polynomial,
         )
 
@@ -125,9 +126,9 @@ class RadialMixedTP(nnx.Module):
             )
         )
 
-    def _to_rep_tensor(self, orb, max_l):
+    def _to_rep_tensor(self, orb, max_l, layout):
         num_nodes = orb.shape[0]
-        if not self.uniform_1d:
+        if layout == LAYOUT:
             return orb.reshape(num_nodes, max_l * max_l * self.nwave)
         chunks = []
         for l_value in range(max_l):
@@ -135,8 +136,8 @@ class RadialMixedTP(nnx.Module):
             chunks.append(jnp.swapaxes(segment, 1, 2).reshape(num_nodes, -1))
         return jnp.concatenate(chunks, axis=1)
 
-    def _from_rep_tensor(self, flat, num_nodes):
-        if not self.uniform_1d:
+    def _from_rep_tensor(self, flat, num_nodes, layout):
+        if layout == LAYOUT:
             return flat.reshape(num_nodes, self.prmaxl * self.prmaxl, self.nwave)
         chunks = []
         offset = 0
@@ -156,12 +157,12 @@ class RadialMixedTP(nnx.Module):
         weight_rep = cuex.RepArray(self.descriptor.inputs[0], weights, LAYOUT)
         init_rep = cuex.RepArray(
             self.init_irreps,
-            self._to_rep_tensor(init_orb, self.rmaxl),
+            self._to_rep_tensor(init_orb, self.rmaxl, self.descriptor.inputs[1].layout),
             self.descriptor.inputs[1].layout,
         )
         iter_rep = cuex.RepArray(
             self.iter_irreps,
-            self._to_rep_tensor(iter_orb, self.prmaxl),
+            self._to_rep_tensor(iter_orb, self.prmaxl, self.descriptor.inputs[2].layout),
             self.descriptor.inputs[2].layout,
         )
 
@@ -171,4 +172,4 @@ class RadialMixedTP(nnx.Module):
             method=self.tp_method,
             math_dtype=jnp.dtype(dtype).name,
         )
-        return self._from_rep_tensor(output.array, num_nodes)
+        return self._from_rep_tensor(output.array, num_nodes, self.descriptor.outputs[0].layout)
