@@ -211,6 +211,7 @@ class MPNNCore(nnx.Module):
 
         ave_neigh = segment_sum(cut_func, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         ave_neigh = ave_neigh[:, None] + eps
+        inv_ave_neigh = jnp.reciprocal(ave_neigh)
 
         cn_indices = spec_indices[neighlist]
         pair_spec = self.neighcoeffnn(self.config.com_spec)
@@ -256,7 +257,7 @@ class MPNNCore(nnx.Module):
                 spec_indices=spec_indices,
                 orb_coeff=orb_coeff,
                 neighlist=neighlist,
-                ave_neigh=ave_neigh,
+                inv_ave_neigh=inv_ave_neigh,
                 pindex_l=pindex_l,
                 sph=sph,
                 dtype_2=dtype_2,
@@ -280,8 +281,7 @@ class MPNNCore(nnx.Module):
 
         return jnp.sum(atomic_ene * center_factor) * jnp.array(self.config.std, dtype=dtype)
 
-    def sum_interaction(self, numatom, prmaxl_i, center_orbital, contract_coeff, tp_layer, spec_indices, orb_coeff, neighlist, ave_neigh, pindex_l, sph, dtype_2):
-        inv_ave_neigh = jnp.reciprocal(ave_neigh)
+    def sum_interaction(self, numatom, prmaxl_i, center_orbital, contract_coeff, tp_layer, spec_indices, orb_coeff, neighlist, inv_ave_neigh, pindex_l, sph, dtype_2):
         norm_center_orbital = center_orbital * inv_ave_neigh[:, None]
         iter_orb = segment_sum(norm_center_orbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
