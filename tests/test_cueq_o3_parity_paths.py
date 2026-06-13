@@ -80,6 +80,15 @@ def test_radial_mixed_tp_uses_two_input_channel_weight_axes():
 
 
 def test_radial_mixed_tp_accepts_configured_methods():
+    tp_custom = cueq_tp.RadialMixedTP(
+        nspec=1,
+        nwave=2,
+        rmaxl=2,
+        prmaxl=2,
+        dtype=jnp.float32,
+        tp_method="custom",
+        rngs=nnx.Rngs(0),
+    )
     tp_native = cueq_tp.RadialMixedTP(
         nspec=1,
         nwave=2,
@@ -99,8 +108,58 @@ def test_radial_mixed_tp_accepts_configured_methods():
         rngs=nnx.Rngs(0),
     )
 
+    assert tp_custom.tp_method == "custom"
     assert tp_native.tp_method == "naive"
     assert tp_uniform.tp_method == "uniform_1d"
+
+
+def test_radial_mixed_tp_custom_forward():
+    tp = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=4,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="custom",
+        rngs=nnx.Rngs(0),
+    )
+
+    init_orb = jax.random.normal(jax.random.key(1), (5, 9, 4), dtype=jnp.float32)
+    iter_orb = jax.random.normal(jax.random.key(2), (5, 9, 4), dtype=jnp.float32)
+    spec_indices = jnp.array([0, 1, 0, 1, 0])
+    out = tp(init_orb, iter_orb, spec_indices, jnp.float32)
+
+    assert out.shape == (5, 9, 4)
+    assert out.dtype == jnp.float32
+
+
+def test_radial_mixed_tp_custom_matches_native_forward():
+    tp_custom = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=3,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="custom",
+        rngs=nnx.Rngs(0),
+    )
+    tp_native = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=3,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="native",
+        rngs=nnx.Rngs(0),
+    )
+
+    init_orb = jax.random.normal(jax.random.key(1), (4, 9, 3), dtype=jnp.float32)
+    iter_orb = jax.random.normal(jax.random.key(2), (4, 9, 3), dtype=jnp.float32)
+    spec_indices = jnp.array([0, 1, 0, 1])
+    out_custom = tp_custom(init_orb, iter_orb, spec_indices, jnp.float32)
+    out_native = tp_native(init_orb, iter_orb, spec_indices, jnp.float32)
+
+    assert jnp.allclose(out_custom, out_native, atol=2e-5, rtol=2e-5)
 
 
 def test_radial_mixed_tp_uniform_1d_forward():

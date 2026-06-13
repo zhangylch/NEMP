@@ -2,6 +2,7 @@ import cuequivariance as cue
 import cuequivariance_jax as cuex
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 
 
@@ -11,12 +12,14 @@ UNIFORM_LAYOUT = cue.IrrepsLayout.mul_ir
 
 def normalize_tp_method(tp_method):
     method = tp_method.lower()
+    if method == "custom":
+        return "custom"
     if method in ("native", "naive"):
         return "naive"
     if method in ("uniform_1d", "uniform1d", "uniform-1d"):
         return "uniform_1d"
     raise ValueError(
-        f"Unsupported tp_method {tp_method!r}; expected 'native' or 'uniform_1d'."
+        f"Unsupported tp_method {tp_method!r}; expected 'custom', 'native', or 'uniform_1d'."
     )
 
 
@@ -42,7 +45,7 @@ def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
 
 
 class RadialMixedTP(nnx.Module):
-    def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, tp_method="native", *, rngs):
+    def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, tp_method="custom", *, rngs):
         tp_method = normalize_tp_method(tp_method)
         uniform_1d = tp_method == "uniform_1d"
         init_layout = UNIFORM_LAYOUT if uniform_1d else LAYOUT
@@ -90,6 +93,16 @@ class RadialMixedTP(nnx.Module):
             )
         stp = stp.normalize_paths_for_operand(1)
         num_weight_paths = stp.num_paths
+        custom_paths = tuple(
+            (
+                int(path.indices[0]),
+                int(path.indices[1]),
+                int(path.indices[2]),
+                int(path.indices[3]),
+                np.asarray(path.coefficients),
+            )
+            for path in stp.paths
+        )
         polynomial_stp = stp
         if uniform_1d:
             polynomial_stp = stp.flatten_modes("u")
@@ -124,6 +137,7 @@ class RadialMixedTP(nnx.Module):
         self.iter_irreps = nnx.static(iter_irreps)
         self.descriptor = nnx.static(descriptor)
         self.ir_dict_polynomial = nnx.static(ir_dict_polynomial)
+        self.custom_paths = nnx.static(custom_paths)
         self.tp_method = nnx.static(tp_method)
         self.uniform_1d = nnx.static(uniform_1d)
         self.num_paths = nnx.static(num_weight_paths)
@@ -160,20 +174,27 @@ class RadialMixedTP(nnx.Module):
             offset += width
         return jnp.concatenate(chunks, axis=1)
 
-    def _to_ir_dict(self, orb, max_l, irreps, layout):
+    def _to_ir_dict(self, orb, max_l, irreps, layout, descriptors):
+        num_nodes = orb.shape[0]
         result = {}
-        for l_value, (_, ir) in enumerate(irreps):
+        for l_value, ((_, ir), desc) in enumerate(zip(irreps, descriptors)):
             segment = orb[:, l_value * l_value : (l_value + 1) * (l_value + 1), :]
             if layout == UNIFORM_LAYOUT:
                 segment = jnp.swapaxes(segment, 1, 2)
-            result[ir] = segment
+            result[ir] = segment.reshape(
+                (num_nodes, desc.num_segments) + desc.segment_shape
+            )
         return result
 
     def _from_ir_dict(self, values, irreps, layout):
         chunks = []
-        for _, ir in irreps:
+        for l_value, (_, ir) in enumerate(irreps):
             segment = values[ir]
-            if layout == UNIFORM_LAYOUT:
+            num_nodes = segment.shape[0]
+            if layout == LAYOUT:
+                segment = segment.reshape(num_nodes, 2 * l_value + 1, self.nwave)
+            else:
+                segment = segment.reshape(num_nodes, self.nwave, 2 * l_value + 1)
                 segment = jnp.swapaxes(segment, -2, -1)
             chunks.append(segment)
         return jnp.concatenate(chunks, axis=1)
@@ -185,17 +206,22 @@ class RadialMixedTP(nnx.Module):
         weights = self.weights[spec_indices].reshape(
             (num_nodes, weight_operand.num_segments) + weight_operand.segment_shape
         )
+        num_init = len(self.init_irreps)
+        init_descriptors = polynomial.inputs[1 : 1 + num_init]
+        iter_descriptors = polynomial.inputs[1 + num_init :]
         init_dict = self._to_ir_dict(
             init_orb,
             self.rmaxl,
             self.init_irreps,
             self.descriptor.inputs[1].layout,
+            init_descriptors,
         )
         iter_dict = self._to_ir_dict(
             iter_orb,
             self.prmaxl,
             self.iter_irreps,
             self.descriptor.inputs[2].layout,
+            iter_descriptors,
         )
         out_template = {
             ir: jax.ShapeDtypeStruct(
@@ -216,7 +242,37 @@ class RadialMixedTP(nnx.Module):
             self.descriptor.outputs[0].layout,
         )
 
+    def _call_custom(self, init_orb, iter_orb, spec_indices):
+        num_nodes = init_orb.shape[0]
+        dtype = init_orb.dtype
+        weights = self.weights[spec_indices]
+        output = jnp.zeros(
+            (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
+            dtype=dtype,
+        )
+        for weight_idx, init_l, iter_l, out_l, coefficients in self.custom_paths:
+            init_segment = init_orb[
+                :, init_l * init_l : (init_l + 1) * (init_l + 1), :
+            ]
+            iter_segment = iter_orb[
+                :, iter_l * iter_l : (iter_l + 1) * (iter_l + 1), :
+            ]
+            path_output = jnp.einsum(
+                "nuv,niu,njv,ijk->nkv",
+                weights[:, weight_idx],
+                init_segment,
+                iter_segment,
+                jnp.asarray(coefficients, dtype=dtype),
+            )
+            output = output.at[
+                :, out_l * out_l : (out_l + 1) * (out_l + 1), :
+            ].add(path_output)
+        return output
+
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
+        if self.tp_method == "custom":
+            return self._call_custom(init_orb, iter_orb, spec_indices)
+
         if self.uniform_1d:
             return self._call_uniform_1d(init_orb, iter_orb, spec_indices, dtype)
 
