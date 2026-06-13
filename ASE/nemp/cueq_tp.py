@@ -34,6 +34,13 @@ def normalize_tp_mode(tp_mode):
     )
 
 
+def _to_static_tuple(array):
+    values = np.asarray(array).tolist()
+    if isinstance(values, list):
+        return tuple(_to_static_tuple(value) for value in values)
+    return float(values)
+
+
 def orbital_index_l(max_l):
     index_l = jnp.arange(max_l * max_l)
     for l in range(max_l):
@@ -125,16 +132,18 @@ class RadialMixedTP(nnx.Module):
             )
         stp = stp.normalize_paths_for_operand(1)
         num_weight_paths = stp.num_paths
-        custom_paths = tuple(
-            (
-                int(path.indices[0]),
-                int(path.indices[1]),
-                int(path.indices[2]),
-                int(path.indices[3]),
-                np.asarray(path.coefficients),
+        custom_paths = ()
+        if tp_method == "custom":
+            custom_paths = tuple(
+                (
+                    int(path.indices[0]),
+                    int(path.indices[1]),
+                    int(path.indices[2]),
+                    int(path.indices[3]),
+                    _to_static_tuple(path.coefficients),
+                )
+                for path in stp.paths
             )
-            for path in stp.paths
-        )
         polynomial_stp = stp
         if uniform_1d:
             polynomial_stp = stp.flatten_modes("u")
