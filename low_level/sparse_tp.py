@@ -33,9 +33,8 @@ def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
 
 
 def sparse_cg_paths(rmaxl, prmaxl):
-    paths = []
+    path_specs = []
     count_l = [0] * prmaxl
-    weight_idx = 0
     for out_l in range(prmaxl):
         for init_l in range(rmaxl):
             low = abs(init_l - out_l)
@@ -43,22 +42,26 @@ def sparse_cg_paths(rmaxl, prmaxl):
             for iter_l in range(low, high):
                 if (init_l + iter_l + out_l) % 2 != 0:
                     continue
-                coefficients = cg_cal.clebsch_gordan(init_l, iter_l, out_l)
-                mi, mj, mk = np.nonzero(np.abs(coefficients) > 1e-12)
-                paths.append(
-                    (
-                        weight_idx,
-                        init_l,
-                        iter_l,
-                        out_l,
-                        tuple(int(value) for value in mi),
-                        tuple(int(value) for value in mj),
-                        tuple(int(value) for value in mk),
-                        tuple(float(coefficients[i, j, k]) for i, j, k in zip(mi, mj, mk)),
-                    )
-                )
+                path_specs.append((init_l, iter_l, out_l))
                 count_l[out_l] += 1
-                weight_idx += 1
+
+    paths = []
+    for weight_idx, (init_l, iter_l, out_l) in enumerate(path_specs):
+        coefficients = cg_cal.clebsch_gordan(init_l, iter_l, out_l)
+        coefficients = coefficients / np.sqrt(count_l[out_l])
+        mi, mj, mk = np.nonzero(np.abs(coefficients) > 1e-12)
+        paths.append(
+            (
+                weight_idx,
+                init_l,
+                iter_l,
+                out_l,
+                tuple(int(value) for value in mi),
+                tuple(int(value) for value in mj),
+                tuple(int(value) for value in mk),
+                tuple(float(coefficients[i, j, k]) for i, j, k in zip(mi, mj, mk)),
+            )
+        )
     return tuple(paths), tuple(count_l)
 
 

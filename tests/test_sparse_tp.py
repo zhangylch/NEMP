@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
+from low_level import cg_cal
 from low_level import sparse_tp
 
 
@@ -37,6 +38,19 @@ def test_sparse_paths_store_one_dimensional_cg_terms():
     assert len(mi) == len(mj) == len(mk) == len(coefficients)
     assert all(isinstance(value, int) for value in mi + mj + mk)
     assert all(isinstance(value, float) for value in coefficients)
+
+
+def test_sparse_paths_apply_count_l_normalization():
+    paths, count_l = sparse_tp.sparse_cg_paths(3, 3)
+    path = next(
+        path for path in paths
+        if path[1] == 0 and path[2] == 0 and path[3] == 0
+    )
+    mi, mj, mk, coefficients = path[4], path[5], path[6], path[7]
+    raw = cg_cal.clebsch_gordan(0, 0, 0)
+    expected = raw[mi[0], mj[0], mk[0]] / jnp.sqrt(count_l[0])
+
+    assert jnp.allclose(jnp.array(coefficients[0]), expected)
 
 
 def test_radial_mixed_tp_full_uses_two_channel_weight_axes():
