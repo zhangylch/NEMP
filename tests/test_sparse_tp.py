@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import nnx
 
 from low_level import cg_cal
@@ -67,6 +68,7 @@ def test_radial_mixed_tp_full_uses_two_channel_weight_axes():
 
     assert tp.tp_mode == "full"
     assert tp.weights.shape == (nspec, tp.num_paths, nwave, nwave)
+    assert np.isclose(tp.weight_norm, 1.0 / np.sqrt(nwave))
     assert tp.weight_dim == tp.num_paths * nwave * nwave
 
 
@@ -84,6 +86,7 @@ def test_radial_mixed_tp_channelwise_uses_single_channel_weight_axis():
 
     assert tp.tp_mode == "channelwise"
     assert tp.weights.shape == (nspec, tp.num_paths, nwave)
+    assert tp.weight_norm == 1.0
     assert tp.init_mix.shape == (nspec, 3, nwave, nwave)
     assert tp.iter_mix.shape == (nspec, 3, nwave, nwave)
     assert tp.weight_dim == tp.num_paths * nwave

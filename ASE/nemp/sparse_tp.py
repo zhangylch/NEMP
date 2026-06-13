@@ -90,6 +90,7 @@ class RadialMixedTP(nnx.Module):
         self.paths = nnx.static(paths)
         self.count_l = nnx.static(count_l)
         self.num_paths = nnx.static(num_weight_paths)
+        self.weight_norm = nnx.static(1.0 if channelwise else 1.0 / np.sqrt(nwave))
         if channelwise:
             weight_shape = (nspec, num_weight_paths, nwave)
         else:
@@ -121,7 +122,7 @@ class RadialMixedTP(nnx.Module):
     def _call_sparse(self, init_orb, iter_orb, spec_indices):
         num_nodes = init_orb.shape[0]
         dtype = init_orb.dtype
-        weights = self.weights[spec_indices]
+        weights = self.weights[spec_indices] * self.weight_norm
         output = jnp.zeros(
             (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
             dtype=dtype,
