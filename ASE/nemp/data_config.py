@@ -28,3 +28,4 @@ class ModelConfig:
     MP_loop: int = 2
     pn: int = 6
     tp_method: str = "custom"
+    tp_mode: str = "full"

@@ -23,6 +23,17 @@ def normalize_tp_method(tp_method):
     )
 
 
+def normalize_tp_mode(tp_mode):
+    mode = tp_mode.lower()
+    if mode in ("full", "full_mixing", "full-mixing"):
+        return "full"
+    if mode in ("channelwise", "channel-wise", "channel"):
+        return "channelwise"
+    raise ValueError(
+        f"Unsupported tp_mode {tp_mode!r}; expected 'full' or 'channelwise'."
+    )
+
+
 def orbital_index_l(max_l):
     index_l = jnp.arange(max_l * max_l)
     for l in range(max_l):
@@ -45,9 +56,24 @@ def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
 
 
 class RadialMixedTP(nnx.Module):
-    def __init__(self, nspec, nwave, rmaxl, prmaxl, dtype, tp_method="custom", *, rngs):
+    def __init__(
+        self,
+        nspec,
+        nwave,
+        rmaxl,
+        prmaxl,
+        dtype,
+        tp_method="custom",
+        tp_mode="full",
+        *,
+        rngs,
+    ):
         tp_method = normalize_tp_method(tp_method)
+        tp_mode = normalize_tp_mode(tp_mode)
         uniform_1d = tp_method == "uniform_1d"
+        channelwise = tp_mode == "channelwise"
+        if channelwise and uniform_1d:
+            raise ValueError("tp_mode='channelwise' currently supports tp_method='custom' or 'native'.")
         init_layout = UNIFORM_LAYOUT if uniform_1d else LAYOUT
         iter_layout = LAYOUT
 
@@ -65,10 +91,16 @@ class RadialMixedTP(nnx.Module):
         scalar_stp = scalar_descriptor.polynomial.operations[0][1]
 
         # Operand 3 is the STP output; i,j,k are the CG coefficient axes.
-        # u,v mix input channels and output reuses v.
-        # uniform_1d flattens the init-channel mode. Keep coefficient modes
-        # first on the iter/output operands so cueq can flatten CG modes too.
-        if uniform_1d:
+        # Full mode gives each CG path an nwave x nwave channel matrix.
+        # Channelwise mode pre-mixes both inputs, then applies per-channel path weights.
+        if channelwise:
+            stp = cue.SegmentedTensorProduct.from_subscripts("u,iu,ju,ku+ijk")
+            for l_value in range(rmaxl):
+                stp.add_segment(1, (2 * l_value + 1, nwave))
+            for l_value in range(prmaxl):
+                stp.add_segment(2, (2 * l_value + 1, nwave))
+                stp.add_segment(3, (2 * l_value + 1, nwave))
+        elif uniform_1d:
             stp = cue.SegmentedTensorProduct.from_subscripts("uv,ui,jv,kv+ijk")
             for l_value in range(rmaxl):
                 stp.add_segment(1, (nwave, 2 * l_value + 1))
@@ -89,7 +121,7 @@ class RadialMixedTP(nnx.Module):
                 path.indices[2],
                 path.indices[3],
                 c=path.coefficients,
-                dims={"u": nwave, "v": nwave},
+                dims={"u": nwave} if channelwise else {"u": nwave, "v": nwave},
             )
         stp = stp.normalize_paths_for_operand(1)
         num_weight_paths = stp.num_paths
@@ -139,16 +171,30 @@ class RadialMixedTP(nnx.Module):
         self.ir_dict_polynomial = nnx.static(ir_dict_polynomial)
         self.custom_paths = nnx.static(custom_paths)
         self.tp_method = nnx.static(tp_method)
+        self.tp_mode = nnx.static(tp_mode)
         self.uniform_1d = nnx.static(uniform_1d)
+        self.channelwise = nnx.static(channelwise)
         self.num_paths = nnx.static(num_weight_paths)
         self.weight_dim = nnx.static(descriptor.inputs[0].dim)
+        if channelwise:
+            weight_shape = (nspec, num_weight_paths, nwave)
+        else:
+            weight_shape = (nspec, num_weight_paths, nwave, nwave)
         self.weights = nnx.Param(
             nnx.initializers.normal(1.0)(
                 rngs.params(),
-                (nspec, num_weight_paths, nwave, nwave),
+                weight_shape,
                 dtype,
             )
         )
+        if channelwise:
+            eye = jnp.eye(nwave, dtype=dtype)
+            self.init_mix = nnx.Param(
+                jnp.tile(eye[None, None, :, :], (nspec, rmaxl, 1, 1))
+            )
+            self.iter_mix = nnx.Param(
+                jnp.tile(eye[None, None, :, :], (nspec, prmaxl, 1, 1))
+            )
 
     def _to_rep_tensor(self, orb, max_l, layout):
         num_nodes = orb.shape[0]
@@ -197,6 +243,13 @@ class RadialMixedTP(nnx.Module):
                 segment = segment.reshape(num_nodes, self.nwave, 2 * l_value + 1)
                 segment = jnp.swapaxes(segment, -2, -1)
             chunks.append(segment)
+        return jnp.concatenate(chunks, axis=1)
+
+    def _apply_channel_mix(self, orb, mix, max_l):
+        chunks = []
+        for l_value in range(max_l):
+            segment = orb[:, l_value * l_value : (l_value + 1) * (l_value + 1), :]
+            chunks.append(jnp.einsum("nmu,nuv->nmv", segment, mix[:, l_value]))
         return jnp.concatenate(chunks, axis=1)
 
     def _call_uniform_1d(self, init_orb, iter_orb, spec_indices, dtype):
@@ -257,19 +310,41 @@ class RadialMixedTP(nnx.Module):
             iter_segment = iter_orb[
                 :, iter_l * iter_l : (iter_l + 1) * (iter_l + 1), :
             ]
-            path_output = jnp.einsum(
-                "nuv,niu,njv,ijk->nkv",
-                weights[:, weight_idx],
-                init_segment,
-                iter_segment,
-                jnp.asarray(coefficients, dtype=dtype),
-            )
+            cg = jnp.asarray(coefficients, dtype=dtype)
+            if self.channelwise:
+                path_output = jnp.einsum(
+                    "nu,niu,nju,ijk->nku",
+                    weights[:, weight_idx],
+                    init_segment,
+                    iter_segment,
+                    cg,
+                )
+            else:
+                path_output = jnp.einsum(
+                    "nuv,niu,njv,ijk->nkv",
+                    weights[:, weight_idx],
+                    init_segment,
+                    iter_segment,
+                    cg,
+                )
             output = output.at[
                 :, out_l * out_l : (out_l + 1) * (out_l + 1), :
             ].add(path_output)
         return output
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
+        if self.channelwise:
+            init_orb = self._apply_channel_mix(
+                init_orb,
+                self.init_mix[spec_indices],
+                self.rmaxl,
+            )
+            iter_orb = self._apply_channel_mix(
+                iter_orb,
+                self.iter_mix[spec_indices],
+                self.prmaxl,
+            )
+
         if self.tp_method == "custom":
             return self._call_custom(init_orb, iter_orb, spec_indices)
 

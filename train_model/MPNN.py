@@ -49,6 +49,7 @@ class MPNNCore(nnx.Module):
                 config.prmaxl,
                 dtype,
                 config.tp_method,
+                config.tp_mode,
                 rngs=rngs,
             )
             for _ in range(config.MP_loop)

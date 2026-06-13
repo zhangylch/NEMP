@@ -79,6 +79,25 @@ def test_radial_mixed_tp_uses_two_input_channel_weight_axes():
     assert tp.weight_dim == tp.num_paths * nwave * nwave
 
 
+def test_radial_mixed_tp_channelwise_uses_single_channel_weight_axis():
+    nspec, nwave = 3, 4
+    tp = cueq_tp.RadialMixedTP(
+        nspec=nspec,
+        nwave=nwave,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_mode="channelwise",
+        rngs=nnx.Rngs(0),
+    )
+
+    assert tp.tp_mode == "channelwise"
+    assert tp.weights.shape == (nspec, tp.num_paths, nwave)
+    assert tp.init_mix.shape == (nspec, 3, nwave, nwave)
+    assert tp.iter_mix.shape == (nspec, 3, nwave, nwave)
+    assert tp.weight_dim == tp.num_paths * nwave
+
+
 def test_radial_mixed_tp_accepts_configured_methods():
     tp_custom = cueq_tp.RadialMixedTP(
         nspec=1,
@@ -113,6 +132,24 @@ def test_radial_mixed_tp_accepts_configured_methods():
     assert tp_uniform.tp_method == "uniform_1d"
 
 
+def test_radial_mixed_tp_rejects_channelwise_uniform_1d():
+    try:
+        cueq_tp.RadialMixedTP(
+            nspec=1,
+            nwave=2,
+            rmaxl=2,
+            prmaxl=2,
+            dtype=jnp.float32,
+            tp_method="uniform_1D",
+            tp_mode="channelwise",
+            rngs=nnx.Rngs(0),
+        )
+    except ValueError as exc:
+        assert "channelwise" in str(exc)
+    else:
+        raise AssertionError("channelwise uniform_1D should be rejected")
+
+
 def test_radial_mixed_tp_custom_forward():
     tp = cueq_tp.RadialMixedTP(
         nspec=2,
@@ -121,6 +158,27 @@ def test_radial_mixed_tp_custom_forward():
         prmaxl=3,
         dtype=jnp.float32,
         tp_method="custom",
+        rngs=nnx.Rngs(0),
+    )
+
+    init_orb = jax.random.normal(jax.random.key(1), (5, 9, 4), dtype=jnp.float32)
+    iter_orb = jax.random.normal(jax.random.key(2), (5, 9, 4), dtype=jnp.float32)
+    spec_indices = jnp.array([0, 1, 0, 1, 0])
+    out = tp(init_orb, iter_orb, spec_indices, jnp.float32)
+
+    assert out.shape == (5, 9, 4)
+    assert out.dtype == jnp.float32
+
+
+def test_radial_mixed_tp_channelwise_custom_forward():
+    tp = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=4,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="custom",
+        tp_mode="channelwise",
         rngs=nnx.Rngs(0),
     )
 
@@ -150,6 +208,37 @@ def test_radial_mixed_tp_custom_matches_native_forward():
         prmaxl=3,
         dtype=jnp.float32,
         tp_method="native",
+        rngs=nnx.Rngs(0),
+    )
+
+    init_orb = jax.random.normal(jax.random.key(1), (4, 9, 3), dtype=jnp.float32)
+    iter_orb = jax.random.normal(jax.random.key(2), (4, 9, 3), dtype=jnp.float32)
+    spec_indices = jnp.array([0, 1, 0, 1])
+    out_custom = tp_custom(init_orb, iter_orb, spec_indices, jnp.float32)
+    out_native = tp_native(init_orb, iter_orb, spec_indices, jnp.float32)
+
+    assert jnp.allclose(out_custom, out_native, atol=2e-5, rtol=2e-5)
+
+
+def test_radial_mixed_tp_channelwise_custom_matches_native_forward():
+    tp_custom = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=3,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="custom",
+        tp_mode="channelwise",
+        rngs=nnx.Rngs(0),
+    )
+    tp_native = cueq_tp.RadialMixedTP(
+        nspec=2,
+        nwave=3,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="native",
+        tp_mode="channelwise",
         rngs=nnx.Rngs(0),
     )
 
