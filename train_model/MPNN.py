@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
 from collections.abc import Mapping
-from low_level import cueq_tp
+from low_level import sparse_tp
 from src.data_config import ModelConfig
 from low_level import MLP
 
@@ -42,13 +42,12 @@ class MPNNCore(nnx.Module):
             )
         )
         self.tp_layers = nnx.List([
-            cueq_tp.RadialMixedTP(
+            sparse_tp.RadialMixedTP(
                 config.nspec,
                 config.nwave,
                 config.rmaxl,
                 config.prmaxl,
                 dtype,
-                config.tp_method,
                 config.tp_mode,
                 rngs=rngs,
             )
@@ -212,7 +211,7 @@ class MPNNCore(nnx.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        sph = cueq_tp.normalized_spherical_harmonics(
+        sph = sparse_tp.normalized_spherical_harmonics(
             rmaxl_i,
             distvec / distances[:, None],
             self.config.index_l,

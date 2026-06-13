@@ -47,7 +47,6 @@
     "nradial": 64,
     "maxneigh_per_node": 26,
     "MP_loop": 3,
-    "tp_method": "custom",
     "tp_mode": "full",
     "emb_nl": [
         2,

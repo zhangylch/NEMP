@@ -55,7 +55,6 @@ class JsonConfig:
     nradial: int = field(default=64)
     maxneigh_per_node: int = field(default=26)
     MP_loop: int = field(default=3)
-    tp_method: str = field(default='custom')
     tp_mode: str = field(default='full')
     
     emb_nl: List[Any] = field(default_factory = lambda: [1, 64, 2, True])
@@ -72,6 +71,7 @@ def load_config(json_path: str) -> JsonConfig:
             json_data = json.load(f)
     except FileNotFoundError:
         return default_config
+    json_data.pop("tp_method", None)
     
     # 仅更新 JSON 中提供的字段
     return replace(default_config, **json_data)

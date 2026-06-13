@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import optax
 
 import train_model.MPNN as MPNN
-from low_level import cueq_tp
+from low_level import sparse_tp
 from src.data_config import ModelConfig
 
 
@@ -118,7 +118,7 @@ def test_nnx_mpnn_nonperiodic_rotation_invariant_energy_and_force():
         out_nl=[0, 4, 1, True],
         reduce_spec=jnp.array([1], dtype=dtype),
         com_spec=jnp.array([[1.0, 1.0]], dtype=dtype),
-        index_l=cueq_tp.orbital_index_l(3),
+        index_l=sparse_tp.orbital_index_l(3),
         initbias_neigh=jnp.array([0.5, 1.5], dtype=dtype),
         use_norm=False,
         use_bias=False,
