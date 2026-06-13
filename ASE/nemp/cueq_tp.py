@@ -1,5 +1,6 @@
 import cuequivariance as cue
 import cuequivariance_jax as cuex
+import jax
 import jax.numpy as jnp
 from flax import nnx
 
@@ -107,6 +108,14 @@ class RadialMixedTP(nnx.Module):
             [cue.IrrepsAndLayout(iter_irreps, iter_layout)],
             polynomial,
         )
+        ir_dict_polynomial = None
+        if uniform_1d:
+            ir_dict_polynomial = (
+                descriptor.split_operand_by_irrep(2)
+                .split_operand_by_irrep(1)
+                .split_operand_by_irrep(-1)
+                .polynomial
+            )
 
         self.nwave = nnx.static(nwave)
         self.rmaxl = nnx.static(rmaxl)
@@ -114,6 +123,7 @@ class RadialMixedTP(nnx.Module):
         self.init_irreps = nnx.static(init_irreps)
         self.iter_irreps = nnx.static(iter_irreps)
         self.descriptor = nnx.static(descriptor)
+        self.ir_dict_polynomial = nnx.static(ir_dict_polynomial)
         self.tp_method = nnx.static(tp_method)
         self.uniform_1d = nnx.static(uniform_1d)
         self.num_paths = nnx.static(num_weight_paths)
@@ -150,7 +160,66 @@ class RadialMixedTP(nnx.Module):
             offset += width
         return jnp.concatenate(chunks, axis=1)
 
+    def _to_ir_dict(self, orb, max_l, irreps, layout):
+        result = {}
+        for l_value, (_, ir) in enumerate(irreps):
+            segment = orb[:, l_value * l_value : (l_value + 1) * (l_value + 1), :]
+            if layout == UNIFORM_LAYOUT:
+                segment = jnp.swapaxes(segment, 1, 2)
+            result[ir] = segment
+        return result
+
+    def _from_ir_dict(self, values, irreps, layout):
+        chunks = []
+        for _, ir in irreps:
+            segment = values[ir]
+            if layout == UNIFORM_LAYOUT:
+                segment = jnp.swapaxes(segment, -2, -1)
+            chunks.append(segment)
+        return jnp.concatenate(chunks, axis=1)
+
+    def _call_uniform_1d(self, init_orb, iter_orb, spec_indices, dtype):
+        num_nodes = init_orb.shape[0]
+        polynomial = self.ir_dict_polynomial
+        weight_operand = polynomial.inputs[0]
+        weights = self.weights[spec_indices].reshape(
+            (num_nodes, weight_operand.num_segments) + weight_operand.segment_shape
+        )
+        init_dict = self._to_ir_dict(
+            init_orb,
+            self.rmaxl,
+            self.init_irreps,
+            self.descriptor.inputs[1].layout,
+        )
+        iter_dict = self._to_ir_dict(
+            iter_orb,
+            self.prmaxl,
+            self.iter_irreps,
+            self.descriptor.inputs[2].layout,
+        )
+        out_template = {
+            ir: jax.ShapeDtypeStruct(
+                (num_nodes, desc.num_segments) + desc.segment_shape,
+                jnp.dtype(dtype),
+            )
+            for (_, ir), desc in zip(self.iter_irreps, polynomial.outputs)
+        }
+        output = cuex.ir_dict.segmented_polynomial_uniform_1d(
+            polynomial,
+            [weights, init_dict, iter_dict],
+            out_template,
+            math_dtype=jnp.dtype(dtype).name,
+        )
+        return self._from_ir_dict(
+            output,
+            self.iter_irreps,
+            self.descriptor.outputs[0].layout,
+        )
+
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
+        if self.uniform_1d:
+            return self._call_uniform_1d(init_orb, iter_orb, spec_indices, dtype)
+
         num_nodes = init_orb.shape[0]
         weights = self.weights[spec_indices].reshape(num_nodes, self.weight_dim)
 
