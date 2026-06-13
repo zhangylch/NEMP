@@ -170,6 +170,29 @@ def test_radial_mixed_tp_custom_forward():
     assert out.dtype == jnp.float32
 
 
+def test_radial_mixed_tp_custom_stores_sparse_cg_terms():
+    tp = cueq_tp.RadialMixedTP(
+        nspec=1,
+        nwave=2,
+        rmaxl=3,
+        prmaxl=3,
+        dtype=jnp.float32,
+        tp_method="custom",
+        rngs=nnx.Rngs(0),
+    )
+
+    path = next(path for path in tp.custom_paths if path[4])
+    mi, mj, mk, coefficients = path[4], path[5], path[6], path[7]
+
+    assert isinstance(mi, tuple)
+    assert isinstance(mj, tuple)
+    assert isinstance(mk, tuple)
+    assert isinstance(coefficients, tuple)
+    assert len(mi) == len(mj) == len(mk) == len(coefficients)
+    assert all(isinstance(value, int) for value in mi + mj + mk)
+    assert all(isinstance(value, float) for value in coefficients)
+
+
 def test_radial_mixed_tp_channelwise_custom_forward():
     tp = cueq_tp.RadialMixedTP(
         nspec=2,

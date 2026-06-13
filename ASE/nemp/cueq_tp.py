@@ -34,13 +34,6 @@ def normalize_tp_mode(tp_mode):
     )
 
 
-def _to_static_tuple(array):
-    values = np.asarray(array).tolist()
-    if isinstance(values, list):
-        return tuple(_to_static_tuple(value) for value in values)
-    return float(values)
-
-
 def orbital_index_l(max_l):
     index_l = jnp.arange(max_l * max_l)
     for l in range(max_l):
@@ -134,16 +127,23 @@ class RadialMixedTP(nnx.Module):
         num_weight_paths = stp.num_paths
         custom_paths = ()
         if tp_method == "custom":
-            custom_paths = tuple(
-                (
-                    int(path.indices[0]),
-                    int(path.indices[1]),
-                    int(path.indices[2]),
-                    int(path.indices[3]),
-                    _to_static_tuple(path.coefficients),
+            paths = []
+            for path in stp.paths:
+                coefficients = np.asarray(path.coefficients)
+                mi, mj, mk = np.nonzero(np.abs(coefficients) > 1e-12)
+                paths.append(
+                    (
+                        int(path.indices[0]),
+                        int(path.indices[1]),
+                        int(path.indices[2]),
+                        int(path.indices[3]),
+                        tuple(int(value) for value in mi),
+                        tuple(int(value) for value in mj),
+                        tuple(int(value) for value in mk),
+                        tuple(float(coefficients[i, j, k]) for i, j, k in zip(mi, mj, mk)),
+                    )
                 )
-                for path in stp.paths
-            )
+            custom_paths = tuple(paths)
         polynomial_stp = stp
         if uniform_1d:
             polynomial_stp = stp.flatten_modes("u")
@@ -312,33 +312,37 @@ class RadialMixedTP(nnx.Module):
             (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
             dtype=dtype,
         )
-        for weight_idx, init_l, iter_l, out_l, coefficients in self.custom_paths:
+        node_indices = jnp.arange(num_nodes)[:, None]
+        for weight_idx, init_l, iter_l, out_l, mi, mj, mk, coefficients in self.custom_paths:
             init_segment = init_orb[
                 :, init_l * init_l : (init_l + 1) * (init_l + 1), :
             ]
             iter_segment = iter_orb[
                 :, iter_l * iter_l : (iter_l + 1) * (iter_l + 1), :
             ]
+            mi = jnp.asarray(mi, dtype=jnp.int32)
+            mj = jnp.asarray(mj, dtype=jnp.int32)
+            mk = jnp.asarray(mk, dtype=jnp.int32)
             cg = jnp.asarray(coefficients, dtype=dtype)
+            init_terms = init_segment[:, mi, :]
+            iter_terms = iter_segment[:, mj, :]
             if self.channelwise:
                 path_output = jnp.einsum(
-                    "nu,niu,nju,ijk->nku",
+                    "nu,ntu,ntu,t->ntu",
                     weights[:, weight_idx],
-                    init_segment,
-                    iter_segment,
+                    init_terms,
+                    iter_terms,
                     cg,
                 )
             else:
                 path_output = jnp.einsum(
-                    "nuv,niu,njv,ijk->nkv",
+                    "nuv,ntu,ntv,t->ntv",
                     weights[:, weight_idx],
-                    init_segment,
-                    iter_segment,
+                    init_terms,
+                    iter_terms,
                     cg,
                 )
-            output = output.at[
-                :, out_l * out_l : (out_l + 1) * (out_l + 1), :
-            ].add(path_output)
+            output = output.at[node_indices, (out_l * out_l + mk)[None, :], :].add(path_output)
         return output
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
