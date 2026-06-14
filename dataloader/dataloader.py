@@ -122,7 +122,6 @@ class Dataloader():
             pot = np.zeros((self.local_size, self.ncyc, self.batchsize))
             numatoms = np.ones((self.local_size, self.ncyc, self.batchsize))
             break_mode = False
-            valid_ncyc = 0
             for igpu in range(self.local_size):
                 if break_mode: break
                 for icyc in range(self.ncyc):
@@ -134,8 +133,6 @@ class Dataloader():
                         if  ibatch > self.batchsize-0.5: break
                         if self.ipoint > self.ntrain - 0.5 and self.train_mode: 
                             self.train_mode= False
-                            if valid_ncyc == 0 and inode == 0 and ineigh == 0 and ibatch == 0:
-                                continue
                             break_mode = True
                             break
                         if self.ipoint > self.numpoint - 0.5: 
@@ -164,8 +161,6 @@ class Dataloader():
                         ibatch +=1
                         ineigh += scutnum
 
-                    if ibatch > 0:
-                        valid_ncyc = max(valid_ncyc, icyc + 1)
                     center_factor[igpu, icyc, :inode] = np.array(1.0, dtype = self.float_dtype)
                     neighlist[igpu, icyc, :, ineigh:] = self.batchnode-1
                     celllist[igpu, icyc, inode:] = self.batchsize-1
@@ -177,8 +172,7 @@ class Dataloader():
             if self.stress_table:
                 abprop = abprop + (stress,)
              
-            valid_ncyc = np.full((self.local_size,), valid_ncyc, dtype=self.int_dtype)
-            return self.ipoint, valid_ncyc, coor.astype(self.float_dtype), cell.astype(self.float_dtype), neighlist.astype(self.int_dtype), celllist.astype(self.int_dtype), shiftimage.astype(self.float_dtype), center_factor.astype(self.float_dtype), species.astype(self.float_dtype), numatoms, abprop
+            return self.ipoint, coor.astype(self.float_dtype), cell.astype(self.float_dtype), neighlist.astype(self.int_dtype), celllist.astype(self.int_dtype), shiftimage.astype(self.float_dtype), center_factor.astype(self.float_dtype), species.astype(self.float_dtype), numatoms, abprop
         else:
             if self.cross_val:
                 self.seed = self.seed+1

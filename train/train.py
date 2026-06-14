@@ -61,10 +61,10 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
                 loss_fn += loss
                 return params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn
             
-            sample_nstep, coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
+            coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
             disp_cell = jnp.zeros_like(cell)
             params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out = \
-            jax.lax.fori_loop(0, sample_nstep, body, (params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out))
+            jax.lax.fori_loop(0, nstep, body, (params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out))
             return params, opt_state, ema_params, loss_out
 
         return optimize_epoch
@@ -81,10 +81,10 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
                 ploss_fn = ploss_fn + ploss
                 return params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn, ploss_fn
 
-            sample_nstep, coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
+            coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
             disp_cell = jnp.zeros_like(cell)
             params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out, ploss_out = \
-            jax.lax.fori_loop(0, sample_nstep, body, (params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out, ploss_out))
+            jax.lax.fori_loop(0, nstep, body, (params, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_out, ploss_out))
             return loss_out, ploss_out
         return get_loss
 
@@ -204,7 +204,7 @@ for data in data_load:
 
 get_gpu0_data_op = lambda sharded_array: sharded_array[0]
 data_on_gpu0_pytree = jax.tree.map(get_gpu0_data_op, data)
-sample_nstep, coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data_on_gpu0_pytree
+coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data_on_gpu0_pytree
 
 initdata = (coor[0], cell[0], jnp.zeros_like(cell[0]), neighlist[0], celllist[0], shiftimage[0], center_factor[0], species[0])
 
