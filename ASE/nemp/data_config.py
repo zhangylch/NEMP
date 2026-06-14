@@ -3,6 +3,36 @@ from typing import Sequence, List, Union, Any
 from dataclasses import field, dataclass
 from jax import Array
 
+
+def _normalized_tp_value(name, value):
+    text = str(value).lower()
+    if name == "tp_method" and text in ("uniform1d", "uniform-1d"):
+        return "uniform_1d"
+    if name == "tp_mode" and text in ("full_mixing", "full-mixing"):
+        return "full"
+    if name == "tp_mode" and text in ("channel-wise", "channel"):
+        return "channelwise"
+    return text
+
+
+def checkpoint_tp_config(model_config, full_config):
+    model_config = dict(model_config)
+    for name in ("tp_method", "tp_mode"):
+        runtime_value = getattr(full_config, name, None)
+        checkpoint_value = model_config.get(name, None)
+        if checkpoint_value is None:
+            if runtime_value is not None:
+                model_config[name] = runtime_value
+            continue
+        if runtime_value is not None and _normalized_tp_value(name, checkpoint_value) != _normalized_tp_value(name, runtime_value):
+            raise ValueError(
+                f"Checkpoint {name}={checkpoint_value!r} does not match "
+                f"full_config {name}={runtime_value!r}. Do not switch TP "
+                "backend or mode when loading a trained checkpoint."
+            )
+    return model_config
+
+
 #save the arguement for inference 
 @dataclass
 class ModelConfig:

@@ -7,7 +7,7 @@ from ase.calculators.calculator import Calculator
 import numpy as np
 import ase.calculators.nemp.MPNN as MPNN
 from ase.calculators.nemp.convert_type import convert_dtype
-from ase.calculators.nemp.data_config import ModelConfig
+from ase.calculators.nemp.data_config import ModelConfig, checkpoint_tp_config
 from ase.calculators.nemp.read_json import load_config
 from ase.calculators.nemp.save_checkpoint import restore_checkpoint
 import orbax.checkpoint as oc
@@ -64,8 +64,7 @@ class NEMP(Calculator):
         checkpoint_data = restore_checkpoint(ckpath, devices)
         restored_step, params, ema_params, opt_state, model_config = checkpoint_data
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
-        model_config = dict(model_config)
-        model_config["tp_method"] = full_config.tp_method
+        model_config = checkpoint_tp_config(model_config, full_config)
         config = ModelConfig(**model_config)
         model = MPNN.MPNN(config)
         self.params = stop_grad(ema_params, self.jnp_dtype)

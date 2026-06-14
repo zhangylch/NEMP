@@ -14,7 +14,7 @@ import dataloader.cudaloader as cudaloader
 import jax
 import jax.numpy as jnp
 from src.save_checkpoint import restore_checkpoint
-from src.data_config import ModelConfig
+from src.data_config import ModelConfig, checkpoint_tp_config
 from src.jax_sharding import device_put_replicated
 
 # 示例：读取配置文件
@@ -73,8 +73,7 @@ if restored is not None:
     start_step, params, ema_params, opt_state, model_config = restored
 
 #==============================Equi MPNN==============================================================
-model_config = dict(model_config)
-model_config["tp_method"] = full_config.tp_method
+model_config = checkpoint_tp_config(model_config, full_config)
 config = ModelConfig(**model_config)
 
 model = MPNN.MPNN(config)
