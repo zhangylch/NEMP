@@ -15,9 +15,9 @@ import jax
 import jax.numpy as jnp
 from src.save_checkpoint import restore_checkpoint
 from src.data_config import ModelConfig, checkpoint_tp_config
-from src.jax_sharding import device_put_replicated, get_jax_devices
+from src.jax_sharding import device_put_pmap_replicated, get_jax_devices
 
-# 示例：读取配置文件
+# Configure JAX precision.
 if full_config.jnp_dtype=='float64':
     jax.config.update("jax_enable_x64", True)
 
@@ -107,7 +107,7 @@ def val_loop(nstep):
 
 
 val_ens = jax.pmap(val_loop(full_config.ncyc), axis_name="eval_GPUs")
-ploss_val = device_put_replicated(jnp.zeros((nprop,)), devices)
+ploss_val = device_put_pmap_replicated(jnp.zeros((nprop,)), devices)
 for data in data_load:
     ploss_val = val_ens(ema_params, ploss_val, data)
     print(ploss_val, flush=True)

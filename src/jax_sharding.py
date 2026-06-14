@@ -33,8 +33,8 @@ def device_put_leading_axis_sharded(x, sharding):
     return jax.tree.map(lambda y: jax.device_put(y, sharding), x)
 
 
-def device_put_replicated(x, devices):
-    """Replacement for deprecated jax.device_put_replicated."""
+def device_put_pmap_replicated(x, devices):
+    """Replicate a pytree along the leading axis for pmap inputs."""
     sharding = leading_axis_sharding(devices)
     return jax.tree.map(
         lambda y: jax.device_put(jnp.stack([y] * len(devices)), sharding),
