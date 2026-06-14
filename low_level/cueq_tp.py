@@ -1,11 +1,9 @@
 import cuequivariance as cue
+import cuequivariance_jax as cuex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx
-from jax.ops import segment_sum
-
-from low_level import sph_cal
 
 
 LAYOUT = cue.IrrepsLayout.ir_mul
@@ -42,10 +40,16 @@ def orbital_index_l(max_l):
 
 
 def normalized_spherical_harmonics(max_l, vectors, index_l, eps):
-    sph = sph_cal.SPH_CAL(max_l=max_l - 1)(vectors.T)
-    sph_norm = segment_sum(jnp.square(sph), index_l, num_segments=max_l) + eps
-    sph = sph / jnp.sqrt(sph_norm[index_l]) * jnp.sqrt((2 * index_l + 1)[:, None])
-    return sph.T
+    vector_rep = cuex.RepArray(
+        cue.Irreps("O3", "1o"),
+        vectors,
+        LAYOUT,
+    )
+    return cuex.spherical_harmonics(
+        list(range(max_l)),
+        vector_rep,
+        normalize=False,
+    ).array
 
 
 def parity_irreps(max_l, mul):
@@ -245,8 +249,6 @@ class RadialMixedTP(nnx.Module):
         return jnp.concatenate(chunks, axis=1)
 
     def _call_uniform_1d(self, init_orb, iter_orb, spec_indices, dtype):
-        import cuequivariance_jax as cuex
-
         num_nodes = init_orb.shape[0]
         polynomial = self.ir_dict_polynomial
         weight_operand = polynomial.inputs[0]
