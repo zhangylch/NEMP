@@ -6,16 +6,16 @@ from src.read_json import load_config
 from src.gpu_sel import gpu_sel
 
 full_config = load_config("full_config.json")
-gpu_sel(1)
+gpu_sel(full_config.local_size)
 
-import inference_model.MPNN as MPNN
-import dataloader_eval.dataloader as dataloader
-import dataloader_eval.cudaloader as cudaloader
+import train_model.MPNN as MPNN
+import dataloader.dataloader as dataloader
+import dataloader.cudaloader as cudaloader
 import jax
-from jax import vmap, jit
 import jax.numpy as jnp
-from src.save_checkpoint import save_checkpoint, restore_checkpoint
+from src.save_checkpoint import restore_checkpoint
 from src.data_config import ModelConfig
+from src.jax_sharding import device_put_replicated
 
 # 示例：读取配置文件
 if full_config.jnp_dtype=='float64':
@@ -24,7 +24,7 @@ if full_config.jnp_dtype=='float64':
 if full_config.jnp_dtype=='float32':
     jax.config.update("jax_default_matmul_precision", "highest")
 
-data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True)
+data_load = dataloader.Dataloader(full_config.maxneigh_per_node, full_config.batchsize, local_size=full_config.local_size, initpot=full_config.initpot, ncyc=full_config.ncyc, cutoff=full_config.cutoff, datafolder=full_config.datafolder, ene_shift=full_config.ene_shift, force_table=full_config.force_table, stress_table=full_config.stress_table, cross_val=full_config.cross_val, jnp_dtype=full_config.jnp_dtype, seed=full_config.data_seed, Fshuffle=False, ntrain=full_config.ntrain, eval_mode=True, node_cap=full_config.node_cap, edge_cap=full_config.edge_cap)
 # generate random data for initialization
 
 #ntrain = data_load.ntrain
@@ -44,7 +44,26 @@ elif full_config.force_table:
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
 
 
-devices = jax.local_devices()
+def get_jax_devices(expected_local_size=None, log=False):
+    devices = jax.local_devices()
+    if log:
+        device_info = [
+            f"{device.id}:{device.platform}:{getattr(device, 'device_kind', 'unknown')}"
+            for device in devices
+        ]
+        print(f"JAX local devices ({len(devices)}): {device_info}", flush=True)
+        if not any(device.platform == "gpu" for device in devices):
+            print("WARNING: JAX did not find a GPU; evaluation will run on CPU.", flush=True)
+    if expected_local_size is not None and len(devices) != expected_local_size:
+        raise RuntimeError(
+            "JAX local device count does not match config.local_size: "
+            f"{len(devices)} vs {expected_local_size}. Check CUDA_VISIBLE_DEVICES, "
+            "Slurm GPU allocation, and the installed JAX CUDA runtime."
+        )
+    return devices
+
+
+devices = get_jax_devices(full_config.local_size, log=True)
 restored = restore_checkpoint(
     full_config.ckpath, 
     devices
@@ -54,29 +73,31 @@ if restored is not None:
     start_step, params, ema_params, opt_state, model_config = restored
 
 #==============================Equi MPNN==============================================================
+model_config = dict(model_config)
+model_config["tp_method"] = full_config.tp_method
 config = ModelConfig(**model_config)
 
 model = MPNN.MPNN(config)
 
-
 if full_config.stress_table:
-    def pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-        ene, (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
-        volume = jnp.sum(cell[0] * jnp.cross(cell[1], cell[2]))
-        return ene, force, stress/volume*jnp.array(full_config.stress_sign)
-    vmap_model = vmap(pes_model, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        (_, ene), (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        volume = jnp.sum(cell[:, 0] * jnp.cross(cell[:, 1], cell[:, 2]), axis=-1)
+        return ene, force, stress/volume[:, None, None]*jnp.array(full_config.stress_sign)
 elif full_config.force_table:
-    vmap_model = vmap(jax.value_and_grad(model.apply, argnums=1), in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        (_, ene), force = jax.value_and_grad(model.apply, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        return ene, force
 else:
-    def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-        return model.apply(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
-    vmap_model = vmap(get_energy, in_axes=(None, 0, 0, 0, 0, 0, 0, 0))
+    def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+        _, ene = model.apply(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        return ene,
 
 def make_loss(pes_model, nprop):
 
-    def get_loss(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop):
+    def get_loss(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop):
 
-        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+        nnprop = pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         ploss = jnp.zeros(nprop)
         for i, iprop in enumerate(abprop):
             ploss = ploss.at[i].set(jnp.sum(jnp.square(nnprop[i] - iprop)))
@@ -86,31 +107,31 @@ def make_loss(pes_model, nprop):
 
     return get_loss
  
-value_fn = make_loss(vmap_model, nprop)       
+value_fn = make_loss(pes_model, nprop)
 
 def val_loop(nstep):
-    def get_loss(params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out):
+    def get_loss(params, ploss_out, data):
         def body(i, carry):
-            params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_fn = carry
+            params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_fn = carry
             inabprop = (iabprop[i] for iabprop in abprop)
-            ploss = value_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], shiftimage[i], center_factor[i], species[i], inabprop)
+            ploss = value_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], celllist[i], shiftimage[i], center_factor[i], species[i], inabprop)
             ploss_fn = ploss_fn + ploss
-            return params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_fn
+            return params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_fn
 
+        coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
         disp_cell = jnp.zeros_like(cell)
-        params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out = \
-        jax.lax.fori_loop(0, nstep, body, (params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species, abprop, ploss_out))
+        params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_out = \
+        jax.lax.fori_loop(0, nstep, body, (params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_out))
         return ploss_out
-    return jax.jit(get_loss)
+    return get_loss
 
 
-val_ens = val_loop(full_config.ncyc)
-ploss_val = jnp.zeros(nprop)        
+val_ens = jax.pmap(val_loop(full_config.ncyc), axis_name="eval_GPUs")
+ploss_val = device_put_replicated(jnp.zeros((nprop,)), devices)
 for data in data_load:
-    coor, cell, neighlist, shiftimage, center_factor, species, abprop = data
-    ploss_val = val_ens(ema_params, coor, cell, neighlist, shiftimage, center_factor, species, abprop, ploss_val)
+    ploss_val = val_ens(ema_params, ploss_val, data)
 
-ploss_val = jnp.sqrt(ploss_val / prop_length)
+ploss_val = jnp.sqrt(jnp.sum(ploss_val, axis=0) / prop_length)
 print(ploss_val)
 
 

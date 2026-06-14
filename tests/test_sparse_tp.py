@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from flax import nnx
 
-from low_level import cueq_tp
+from low_level import sparse_tp
 
 
 def _old_even_rule_counts(rmaxl, prmaxl):
@@ -21,14 +21,14 @@ def _old_even_rule_counts(rmaxl, prmaxl):
 
 def test_sparse_paths_match_previous_even_path_rule():
     rmaxl, prmaxl = 4, 4
-    paths, count_l = cueq_tp.sparse_cg_paths(rmaxl, prmaxl)
+    paths, count_l = sparse_tp.sparse_cg_paths(rmaxl, prmaxl)
 
     assert list(count_l) == _old_even_rule_counts(rmaxl, prmaxl)
     assert len(paths) == sum(count_l)
 
 
 def test_sparse_paths_store_one_dimensional_cg_terms():
-    paths, _ = cueq_tp.sparse_cg_paths(3, 3)
+    paths, _ = sparse_tp.sparse_cg_paths(3, 3)
     path = next(path for path in paths if path[4])
     mi, mj, mk, coefficients = path[4], path[5], path[6], path[7]
 
@@ -43,18 +43,16 @@ def test_sparse_paths_store_one_dimensional_cg_terms():
 
 def test_radial_mixed_tp_full_uses_two_channel_weight_axes():
     nspec, nwave = 3, 4
-    tp = cueq_tp.RadialMixedTP(
+    tp = sparse_tp.RadialMixedTP(
         nspec=nspec,
         nwave=nwave,
         rmaxl=3,
         prmaxl=3,
         dtype=jnp.float32,
-        tp_method="custom",
         tp_mode="full",
         rngs=nnx.Rngs(0),
     )
 
-    assert tp.tp_method == "custom"
     assert tp.tp_mode == "full"
     assert not tp.init_channel_first
     assert tp.weights.shape == (nspec, tp.num_paths, nwave, nwave)
@@ -64,13 +62,12 @@ def test_radial_mixed_tp_full_uses_two_channel_weight_axes():
 
 def test_radial_mixed_tp_channelwise_uses_single_channel_weight_axis():
     nspec, nwave = 3, 4
-    tp = cueq_tp.RadialMixedTP(
+    tp = sparse_tp.RadialMixedTP(
         nspec=nspec,
         nwave=nwave,
         rmaxl=3,
         prmaxl=3,
         dtype=jnp.float32,
-        tp_method="custom",
         tp_mode="channelwise",
         rngs=nnx.Rngs(0),
     )
@@ -85,18 +82,15 @@ def test_radial_mixed_tp_channelwise_uses_single_channel_weight_axis():
 
 def test_radial_mixed_tp_rejects_native_backend():
     with pytest.raises(ValueError):
-        cueq_tp.RadialMixedTP(
-            nspec=1,
-            nwave=2,
-            rmaxl=2,
-            prmaxl=2,
-            dtype=jnp.float32,
-            tp_method="native",
-            rngs=nnx.Rngs(0),
-        )
+        sparse_tp.normalize_tp_method("native")
 
 
 def test_radial_mixed_tp_rejects_channelwise_uniform_1d():
+    try:
+        from low_level import cueq_tp
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"cuequivariance JAX runtime is unavailable: {exc}")
+
     with pytest.raises(ValueError):
         cueq_tp.RadialMixedTP(
             nspec=1,
@@ -111,13 +105,12 @@ def test_radial_mixed_tp_rejects_channelwise_uniform_1d():
 
 
 def test_radial_mixed_tp_full_forward():
-    tp = cueq_tp.RadialMixedTP(
+    tp = sparse_tp.RadialMixedTP(
         nspec=2,
         nwave=4,
         rmaxl=3,
         prmaxl=3,
         dtype=jnp.float32,
-        tp_method="custom",
         tp_mode="full",
         rngs=nnx.Rngs(0),
     )
@@ -132,13 +125,12 @@ def test_radial_mixed_tp_full_forward():
 
 
 def test_radial_mixed_tp_channelwise_forward():
-    tp = cueq_tp.RadialMixedTP(
+    tp = sparse_tp.RadialMixedTP(
         nspec=2,
         nwave=4,
         rmaxl=3,
         prmaxl=3,
         dtype=jnp.float32,
-        tp_method="custom",
         tp_mode="channelwise",
         rngs=nnx.Rngs(0),
     )
@@ -153,17 +145,19 @@ def test_radial_mixed_tp_channelwise_forward():
 
 
 def test_radial_mixed_tp_uniform_1d_matches_custom_forward():
-    pytest.importorskip("cuequivariance_ops_jax")
+    try:
+        from low_level import cueq_tp
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"cuequivariance JAX runtime is unavailable: {exc}")
     if not any(device.platform == "gpu" for device in jax.local_devices()):
         pytest.skip("uniform_1d requires a GPU-backed cuequivariance_ops_jax runtime")
 
-    tp_custom = cueq_tp.RadialMixedTP(
+    tp_custom = sparse_tp.RadialMixedTP(
         nspec=2,
         nwave=3,
         rmaxl=3,
         prmaxl=3,
         dtype=jnp.float32,
-        tp_method="custom",
         rngs=nnx.Rngs(0),
     )
     tp_uniform = cueq_tp.RadialMixedTP(
@@ -186,7 +180,7 @@ def test_radial_mixed_tp_uniform_1d_matches_custom_forward():
     assert jnp.allclose(out_custom, out_uniform, atol=2e-5, rtol=2e-5)
 
 
-def test_cueq_spherical_harmonics_layout():
+def test_local_spherical_harmonics_layout():
     vectors = jnp.array(
         [
             [1.0, 0.0, 0.0],
@@ -198,9 +192,9 @@ def test_cueq_spherical_harmonics_layout():
     )
     vectors = vectors / jnp.linalg.norm(vectors, axis=1, keepdims=True)
 
-    index_l = cueq_tp.orbital_index_l(3)
+    index_l = sparse_tp.orbital_index_l(3)
     eps = jnp.array(1e-8, dtype=vectors.dtype)
-    sph = cueq_tp.normalized_spherical_harmonics(
+    sph = sparse_tp.normalized_spherical_harmonics(
         3,
         vectors,
         index_l,

@@ -64,6 +64,8 @@ class NEMP(Calculator):
         checkpoint_data = restore_checkpoint(ckpath, devices)
         restored_step, params, ema_params, opt_state, model_config = checkpoint_data
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+        model_config = dict(model_config)
+        model_config["tp_method"] = full_config.tp_method
         config = ModelConfig(**model_config)
         model = MPNN.MPNN(config)
         self.params = stop_grad(ema_params, self.jnp_dtype)

@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
 from collections.abc import Mapping
-from low_level import cueq_tp
+from low_level import sparse_tp
 from src.data_config import ModelConfig
 from low_level import MLP
 
@@ -15,6 +15,38 @@ def _as_rngs(rngs):
     if isinstance(rngs, Mapping):
         rngs = rngs.get("params", rngs.get("default"))
     return nnx.Rngs(rngs)
+
+
+def _tp_backend(tp_method):
+    method = sparse_tp.normalize_tp_method(tp_method)
+    if method == "uniform_1d":
+        from low_level import cueq_tp
+
+        return method, cueq_tp
+    return method, sparse_tp
+
+
+def _make_tp_layer(tp_method, tp_backend, config, dtype, rngs):
+    if tp_method == "uniform_1d":
+        return tp_backend.RadialMixedTP(
+            config.nspec,
+            config.nwave,
+            config.rmaxl,
+            config.prmaxl,
+            dtype,
+            tp_method,
+            config.tp_mode,
+            rngs=rngs,
+        )
+    return tp_backend.RadialMixedTP(
+        config.nspec,
+        config.nwave,
+        config.rmaxl,
+        config.prmaxl,
+        dtype,
+        config.tp_mode,
+        rngs=rngs,
+    )
 
 
 class MPNNCore(nnx.Module):
@@ -41,17 +73,10 @@ class MPNNCore(nnx.Module):
                 dtype,
             )
         )
+        tp_method, tp_backend = _tp_backend(config.tp_method)
+        self.tp_method = nnx.static(tp_method)
         self.tp_layers = nnx.List([
-            cueq_tp.RadialMixedTP(
-                config.nspec,
-                config.nwave,
-                config.rmaxl,
-                config.prmaxl,
-                dtype,
-                config.tp_method,
-                config.tp_mode,
-                rngs=rngs,
-            )
+            _make_tp_layer(tp_method, tp_backend, config, dtype, rngs)
             for _ in range(config.MP_loop)
         ])
 
@@ -198,7 +223,8 @@ class MPNNCore(nnx.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        sph = cueq_tp.normalized_spherical_harmonics(
+        _, tp_backend = _tp_backend(self.tp_method)
+        sph = tp_backend.normalized_spherical_harmonics(
             rmaxl_i,
             distvec / distances[:, None],
             self.config.index_l,

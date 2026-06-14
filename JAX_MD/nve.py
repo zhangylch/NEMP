@@ -14,7 +14,7 @@ import orbax.checkpoint as oc
 from src.data_config import ModelConfig
 from src.read_json import load_config
 from ASE.nemp.convert_type import convert_dtype
-import model.MPNN as MPNN
+import inference_model.MPNN as MPNN
 import JAX_MD.build_neigh as build_neigh
 import fortran.jax_0_7_1.getneigh as getneigh
 
@@ -109,6 +109,8 @@ params = restored["params"]
 params = stop_grad(params)
 model_config = restored["config"]
 model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+model_config = dict(model_config)
+model_config["tp_method"] = full_config.tp_method
 
 config = ModelConfig(**model_config)
 

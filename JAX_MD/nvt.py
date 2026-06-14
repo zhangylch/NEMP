@@ -109,6 +109,8 @@ params = restored["params"]
 params = stop_grad(params)
 model_config = restored["config"]
 model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+model_config = dict(model_config)
+model_config["tp_method"] = full_config.tp_method
 
 config = ModelConfig(**model_config)
 
