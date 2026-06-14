@@ -13,8 +13,7 @@ class CudaDataLoader:
         self.loader = loader
         self.idx = 0
         self.queue = Queue(maxsize=queue_size)
-        self.worker = Thread(target=self.load_loop)
-        self.worker.setDaemon(True)
+        self.worker = Thread(target=self.load_loop, daemon=True)
         self.worker.start()
         self.val_train=0
 

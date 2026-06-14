@@ -16,30 +16,10 @@ from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from jax import vmap, jit
 from optax import tree_utils as otu
 from src.data_config import ModelConfig
-from src.jax_sharding import device_put_replicated
+from src.jax_sharding import device_put_replicated, get_jax_devices
 from dataclasses import replace, asdict
 import json
 from typing import Optional, Any
-
-
-def get_jax_devices(expected_local_size=None, log=False):
-    devices = jax.local_devices()
-    if log:
-        device_info = [
-            f"{device.id}:{device.platform}:{getattr(device, 'device_kind', 'unknown')}"
-            for device in devices
-        ]
-        print(f"JAX local devices ({len(devices)}): {device_info}", flush=True)
-        if not any(device.platform == "gpu" for device in devices):
-            print("WARNING: JAX did not find a GPU; training will run on CPU.", flush=True)
-    if expected_local_size is not None and len(devices) != expected_local_size:
-        raise RuntimeError(
-            "JAX local device count does not match config.local_size: "
-            f"{len(devices)} vs {expected_local_size}. Check CUDA_VISIBLE_DEVICES, "
-            "Slurm GPU allocation, and the installed JAX CUDA runtime."
-        )
-    return devices
-
 
 
 # train function

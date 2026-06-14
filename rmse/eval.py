@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 from src.save_checkpoint import restore_checkpoint
 from src.data_config import ModelConfig, checkpoint_tp_config
-from src.jax_sharding import device_put_replicated
+from src.jax_sharding import device_put_replicated, get_jax_devices
 
 # 示例：读取配置文件
 if full_config.jnp_dtype=='float64':
@@ -42,25 +42,6 @@ elif full_config.force_table:
     prop_length = jnp.array(np.array([ntrain, nforce]))
 
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
-
-
-def get_jax_devices(expected_local_size=None, log=False):
-    devices = jax.local_devices()
-    if log:
-        device_info = [
-            f"{device.id}:{device.platform}:{getattr(device, 'device_kind', 'unknown')}"
-            for device in devices
-        ]
-        print(f"JAX local devices ({len(devices)}): {device_info}", flush=True)
-        if not any(device.platform == "gpu" for device in devices):
-            print("WARNING: JAX did not find a GPU; evaluation will run on CPU.", flush=True)
-    if expected_local_size is not None and len(devices) != expected_local_size:
-        raise RuntimeError(
-            "JAX local device count does not match config.local_size: "
-            f"{len(devices)} vs {expected_local_size}. Check CUDA_VISIBLE_DEVICES, "
-            "Slurm GPU allocation, and the installed JAX CUDA runtime."
-        )
-    return devices
 
 
 devices = get_jax_devices(full_config.local_size, log=True)
@@ -132,5 +113,4 @@ for data in data_load:
 
 ploss_val = jnp.sqrt(jnp.sum(ploss_val, axis=0) / prop_length)
 print(ploss_val)
-
 

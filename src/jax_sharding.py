@@ -9,13 +9,28 @@ def leading_axis_sharding(devices):
     return NamedSharding(mesh, P("x"))
 
 
-def device_put_sharded(shards, devices):
-    """Replacement for deprecated jax.device_put_sharded."""
-    sharding = leading_axis_sharding(devices)
-    return jax.tree.map(
-        lambda *xs: jax.device_put(np.stack(xs), sharding),
-        *shards,
-    )
+def get_jax_devices(expected_local_size=None, log=False):
+    devices = jax.local_devices()
+    if log:
+        device_info = [
+            f"{device.id}:{device.platform}:{getattr(device, 'device_kind', 'unknown')}"
+            for device in devices
+        ]
+        print(f"JAX local devices ({len(devices)}): {device_info}", flush=True)
+        if not any(device.platform == "gpu" for device in devices):
+            print("WARNING: JAX did not find a GPU; execution will run on CPU.", flush=True)
+    if expected_local_size is not None and len(devices) != expected_local_size:
+        raise RuntimeError(
+            "JAX local device count does not match config.local_size: "
+            f"{len(devices)} vs {expected_local_size}. Check CUDA_VISIBLE_DEVICES, "
+            "Slurm GPU allocation, and the installed JAX CUDA runtime."
+        )
+    return devices
+
+
+def device_put_leading_axis_sharded(x, sharding):
+    """Put a pytree whose leading axis is already the device axis."""
+    return jax.tree.map(lambda y: jax.device_put(y, sharding), x)
 
 
 def device_put_replicated(x, devices):
