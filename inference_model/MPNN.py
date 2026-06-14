@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
 from collections.abc import Mapping
-from low_level import sparse_tp
+from low_level import cueq_tp
 from src.data_config import ModelConfig
 from low_level import MLP
 
@@ -42,12 +42,13 @@ class MPNNCore(nnx.Module):
             )
         )
         self.tp_layers = nnx.List([
-            sparse_tp.RadialMixedTP(
+            cueq_tp.RadialMixedTP(
                 config.nspec,
                 config.nwave,
                 config.rmaxl,
                 config.prmaxl,
                 dtype,
+                config.tp_method,
                 config.tp_mode,
                 rngs=rngs,
             )
@@ -197,7 +198,7 @@ class MPNNCore(nnx.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        sph = sparse_tp.normalized_spherical_harmonics(
+        sph = cueq_tp.normalized_spherical_harmonics(
             rmaxl_i,
             distvec / distances[:, None],
             self.config.index_l,
@@ -285,7 +286,11 @@ class MPNNCore(nnx.Module):
         norm_center_orbital = center_orbital * inv_ave_neigh[:, None]
         iter_orb = segment_sum(norm_center_orbital[neighlist[1]] * orb_coeff[:, pindex_l], neighlist[0], num_segments=numatom, indices_are_sorted=True)
 
-        worbital = jnp.einsum("ijk, ij ->ijk", orb_coeff[:, prmaxl_i + self.config.index_l], sph)
+        init_coeff = orb_coeff[:, prmaxl_i + self.config.index_l]
+        if tp_layer.init_channel_first:
+            worbital = jnp.einsum("ijk, ij ->ikj", init_coeff, sph)
+        else:
+            worbital = jnp.einsum("ijk, ij ->ijk", init_coeff, sph)
         init_orb = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         init_orb = init_orb * inv_ave_neigh[:, None]
 

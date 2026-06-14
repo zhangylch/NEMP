@@ -7,7 +7,7 @@ gpu_sel(full_config.local_size)
 
 import jax
 import jax.numpy as jnp
-from low_level import sparse_tp
+from low_level import cueq_tp
 
 jax.config.update("jax_debug_nans", True)
 
@@ -25,6 +25,6 @@ if full_config.pmax_l > full_config.max_l + 0.5:
 key = jax.random.PRNGKey(full_config.seed)
 key = jax.random.split(key, 2)
 
-index_l = sparse_tp.orbital_index_l(rmaxl)
+index_l = cueq_tp.orbital_index_l(rmaxl)
 
 initbias_neigh = jax.random.uniform(key[0], shape=(full_config.nradial,)) * 12 + 0.01
