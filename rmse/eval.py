@@ -117,10 +117,10 @@ def val_loop(nstep):
             ploss_fn = ploss_fn + ploss
             return params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_fn
 
-        coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
+        sample_nstep, coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data
         disp_cell = jnp.zeros_like(cell)
         params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_out = \
-        jax.lax.fori_loop(0, nstep, body, (params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_out))
+        jax.lax.fori_loop(0, sample_nstep, body, (params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, abprop, ploss_out))
         return ploss_out
     return get_loss
 
