@@ -75,6 +75,9 @@ class MPNNCore(nnx.Module):
         )
         tp_method, tp_backend = _tp_backend(config.tp_method)
         self.tp_method = nnx.static(tp_method)
+        self.normalized_spherical_harmonics = nnx.static(
+            tp_backend.normalized_spherical_harmonics
+        )
         self.tp_layers = nnx.List([
             _make_tp_layer(tp_method, tp_backend, config, dtype, rngs)
             for _ in range(config.MP_loop)
@@ -223,8 +226,7 @@ class MPNNCore(nnx.Module):
         judge = distsq > eps
         neigh_factor = judge.astype(dtype)
         distances = jnp.sqrt(distsq + eps)
-        _, tp_backend = _tp_backend(self.tp_method)
-        sph = tp_backend.normalized_spherical_harmonics(
+        sph = self.normalized_spherical_harmonics(
             rmaxl_i,
             distvec / distances[:, None],
             self.config.index_l,
