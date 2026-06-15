@@ -149,10 +149,10 @@ class MPNNCore(nnx.Module):
             )
             for iMP_loop in range(config.MP_loop)
         ])
-        self.ead_list = nnx.List([
+        self.ead_mp_list = nnx.List([
             MLP.MLP(
                 in_features=(3 + iMP_loop) * config.nwave,
-                num_output=3 * config.prmaxl * config.nwave,
+                num_output=2 * config.prmaxl * config.nwave,
                 num_blocks=config.MP_nl[0],
                 features=config.MP_nl[1],
                 layers_per_block=config.MP_nl[2],
@@ -165,10 +165,41 @@ class MPNNCore(nnx.Module):
             )
             for iMP_loop in range(config.MP_loop)
         ])
-        self.ead_list.append(
+        self.ead_mp_list.append(
             MLP.MLP(
                 in_features=2 * config.nwave,
-                num_output=3 * config.prmaxl * config.nwave,
+                num_output=2 * config.prmaxl * config.nwave,
+                num_blocks=config.MP_nl[0],
+                features=config.MP_nl[1],
+                layers_per_block=config.MP_nl[2],
+                use_linear=config.MP_nl[3],
+                use_bias=False,
+                bias_init_value=None,
+                cst=config.cst,
+                dtype=dtype,
+                rngs=rngs,
+            )
+        )
+        self.ead_density_list = nnx.List([
+            MLP.MLP(
+                in_features=(3 + iMP_loop) * config.nwave,
+                num_output=config.prmaxl * config.nwave,
+                num_blocks=config.MP_nl[0],
+                features=config.MP_nl[1],
+                layers_per_block=config.MP_nl[2],
+                use_linear=config.MP_nl[3],
+                use_bias=False,
+                bias_init_value=None,
+                cst=config.cst,
+                dtype=dtype,
+                rngs=rngs,
+            )
+            for iMP_loop in range(config.MP_loop)
+        ])
+        self.ead_density_list.append(
+            MLP.MLP(
+                in_features=2 * config.nwave,
+                num_output=config.prmaxl * config.nwave,
                 num_blocks=config.MP_nl[0],
                 features=config.MP_nl[1],
                 layers_per_block=config.MP_nl[2],
@@ -261,15 +292,16 @@ class MPNNCore(nnx.Module):
         center_orbital = segment_sum(worbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         center_orbital = jnp.einsum("ikm, ijk ->ijm", (self.spec_coeff / jnp.sqrt(nwave_f))[spec_indices], center_orbital / ave_neigh[:, None])
 
-        radial = self.ead_list[-1](ead).reshape(-1, 3, prmaxl_i, nwave_i)
+        mp_radial = self.ead_mp_list[-1](ead).reshape(-1, 2, prmaxl_i, nwave_i)
+        density_radial = self.ead_density_list[-1](ead).reshape(-1, prmaxl_i, nwave_i)
 
         for iter_loop in range(self.config.MP_loop):
             norm_corb = center_orbital * density_norm[:, None]
-            add_orb = radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
+            add_orb = mp_radial[:, 0, pindex_l] * norm_corb[neighlist[0]] + mp_radial[:, 1, pindex_l] * norm_corb[neighlist[1]]
             norm_ead = jnp.einsum("ij, ijk -> ik", sph[:, :pnorb_i], add_orb) / jnp.sqrt(dtype_2)
             ead = jnp.concatenate((ead, norm_ead), axis=1)
 
-            orbital = jnp.einsum("ijk, ij -> ijk", radial[:, 2, pindex_l], sph[:, :pnorb_i])
+            orbital = jnp.einsum("ijk, ij -> ijk", density_radial[:, pindex_l], sph[:, :pnorb_i])
             sum_orb = segment_sum(orbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
             density1 = jnp.sum(sum_orb * norm_corb, axis=1)
             density = jnp.concatenate((density, density1), axis=1)
@@ -296,10 +328,11 @@ class MPNNCore(nnx.Module):
                 norm_factor = jnp.einsum("ijk, ijk -> i", center_orbital, center_orbital) * jnp.reciprocal(prmaxl_f * nwave_f)
                 center_orbital = center_orbital * jnp.reciprocal(jnp.sqrt(norm_factor + eps))[:, None, None]
 
-            radial = self.ead_list[iter_loop](ead).reshape(-1, 3, prmaxl_i, nwave_i)
+            mp_radial = self.ead_mp_list[iter_loop](ead).reshape(-1, 2, prmaxl_i, nwave_i)
+            density_radial = self.ead_density_list[iter_loop](ead).reshape(-1, prmaxl_i, nwave_i)
 
         norm_corb = center_orbital * (density_norm[:, None] / jnp.sqrt(dtype_3))
-        orbital = jnp.einsum("iljk, ij -> ijk", radial[:, :, pindex_l], sph[:, :pnorb_i])
+        orbital = jnp.einsum("ijk, ij -> ijk", density_radial[:, pindex_l], sph[:, :pnorb_i])
         sum_orb = segment_sum(orbital, neighlist[0], num_segments=numatom, indices_are_sorted=True)
         density1 = jnp.sum(sum_orb * norm_corb, axis=1)
         density = jnp.concatenate((density, density1), axis=1)
