@@ -282,7 +282,14 @@ value_fn = make_loss(pes_model, nprop)
 schedule_fn = optax.contrib.reduce_on_plateau(factor=full_config.decay_factor, patience=full_config.patience_step, cooldown=full_config.cooldown, min_scale=full_config.elr/full_config.slr)
 
 #optim = optax.amsgrad(learning_rate=slr)
-optim = optax.chain(optax.add_decayed_weights(full_config.weight_decay), optax.clip_by_global_norm(full_config.clip_norm), optax.amsgrad(learning_rate=full_config.slr))
+optim = optax.apply_if_finite(
+    optax.chain(
+        optax.add_decayed_weights(full_config.weight_decay),
+        optax.clip_by_global_norm(full_config.clip_norm),
+        optax.amsgrad(learning_rate=full_config.slr),
+    ),
+    max_consecutive_errors=5,
+)
 
 opt_state = optim.init(params)
 lr_state = schedule_fn.init(params)
