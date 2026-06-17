@@ -76,6 +76,27 @@ def sparse_cg_paths(rmaxl, prmaxl):
     return tuple(paths), tuple(count_l)
 
 
+def flatten_cg_paths(paths):
+    path_indices = []
+    init_indices = []
+    iter_indices = []
+    out_indices = []
+    coefficients = []
+    for weight_idx, init_l, iter_l, out_l, mi, mj, mk, path_coefficients in paths:
+        path_indices.extend([weight_idx] * len(path_coefficients))
+        init_indices.extend(init_l * init_l + value for value in mi)
+        iter_indices.extend(iter_l * iter_l + value for value in mj)
+        out_indices.extend(out_l * out_l + value for value in mk)
+        coefficients.extend(path_coefficients)
+    return (
+        tuple(path_indices),
+        tuple(init_indices),
+        tuple(iter_indices),
+        tuple(out_indices),
+        tuple(coefficients),
+    )
+
+
 class RadialMixedTP(nnx.Module):
     def __init__(
         self,
@@ -91,6 +112,7 @@ class RadialMixedTP(nnx.Module):
         tp_mode = normalize_tp_mode(tp_mode)
         channelwise = tp_mode == "channelwise"
         paths, count_l = sparse_cg_paths(rmaxl, prmaxl)
+        flat_terms = flatten_cg_paths(paths)
         num_weight_paths = len(paths)
 
         self.nwave = nnx.static(nwave)
@@ -99,7 +121,7 @@ class RadialMixedTP(nnx.Module):
         self.tp_mode = nnx.static(tp_mode)
         self.channelwise = nnx.static(channelwise)
         self.init_channel_first = nnx.static(False)
-        self.paths = nnx.static(paths)
+        self.flat_terms = nnx.static(flat_terms)
         self.count_l = nnx.static(count_l)
         self.num_paths = nnx.static(num_weight_paths)
         self.weight_norm = nnx.static(1.0 if channelwise else 1.0 / np.sqrt(nwave))
@@ -139,37 +161,33 @@ class RadialMixedTP(nnx.Module):
             (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
             dtype=dtype,
         )
+        path_idx, init_idx, iter_idx, out_idx, coefficients = self.flat_terms
+        path_idx = jnp.asarray(path_idx, dtype=jnp.int32)
+        init_idx = jnp.asarray(init_idx, dtype=jnp.int32)
+        iter_idx = jnp.asarray(iter_idx, dtype=jnp.int32)
+        out_idx = jnp.asarray(out_idx, dtype=jnp.int32)
+        cg = jnp.asarray(coefficients, dtype=dtype)
+
+        init_terms = init_orb[:, init_idx, :]
+        iter_terms = iter_orb[:, iter_idx, :]
+        if self.channelwise:
+            path_output = jnp.einsum(
+                "ntu,ntu,ntu,t->ntu",
+                weights[:, path_idx],
+                init_terms,
+                iter_terms,
+                cg,
+            )
+        else:
+            path_output = jnp.einsum(
+                "ntuv,ntu,ntv,t->ntv",
+                weights[:, path_idx],
+                init_terms,
+                iter_terms,
+                cg,
+            )
         node_indices = jnp.arange(num_nodes)[:, None]
-        for weight_idx, init_l, iter_l, out_l, mi, mj, mk, coefficients in self.paths:
-            init_segment = init_orb[
-                :, init_l * init_l : (init_l + 1) * (init_l + 1), :
-            ]
-            iter_segment = iter_orb[
-                :, iter_l * iter_l : (iter_l + 1) * (iter_l + 1), :
-            ]
-            mi = jnp.asarray(mi, dtype=jnp.int32)
-            mj = jnp.asarray(mj, dtype=jnp.int32)
-            mk = jnp.asarray(mk, dtype=jnp.int32)
-            cg = jnp.asarray(coefficients, dtype=dtype)
-            init_terms = init_segment[:, mi, :]
-            iter_terms = iter_segment[:, mj, :]
-            if self.channelwise:
-                path_output = jnp.einsum(
-                    "nu,ntu,ntu,t->ntu",
-                    weights[:, weight_idx],
-                    init_terms,
-                    iter_terms,
-                    cg,
-                )
-            else:
-                path_output = jnp.einsum(
-                    "nuv,ntu,ntv,t->ntv",
-                    weights[:, weight_idx],
-                    init_terms,
-                    iter_terms,
-                    cg,
-                )
-            output = output.at[node_indices, (out_l * out_l + mk)[None, :], :].add(path_output)
+        output = output.at[node_indices, out_idx[None, :], :].add(path_output)
         return output
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
