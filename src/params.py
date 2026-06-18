@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from low_level import sparse_tp
 
-jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_debug_nans", True)
 
 if full_config.jnp_dtype == "float64":
     jax.config.update("jax_enable_x64", True)
