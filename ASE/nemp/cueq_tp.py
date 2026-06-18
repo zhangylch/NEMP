@@ -197,6 +197,10 @@ class RadialMixedTP(nnx.Module):
         iter_irreps = None
         descriptor = None
         ir_dict_polynomial = None
+        weight_operand = None
+        init_descriptors = None
+        iter_descriptors = None
+        output_ir_descriptors = None
         if uniform_1d:
             init_irreps, iter_irreps, descriptor, ir_dict_polynomial = _uniform_1d_polynomial(
                 nwave,
@@ -204,6 +208,11 @@ class RadialMixedTP(nnx.Module):
                 prmaxl,
                 path_infos,
             )
+            num_init = len(init_irreps)
+            weight_operand = ir_dict_polynomial.inputs[0]
+            init_descriptors = tuple(ir_dict_polynomial.inputs[1 : 1 + num_init])
+            iter_descriptors = tuple(ir_dict_polynomial.inputs[1 + num_init :])
+            output_ir_descriptors = tuple(zip(iter_irreps, ir_dict_polynomial.outputs))
 
         self.nwave = nnx.static(nwave)
         self.rmaxl = nnx.static(rmaxl)
@@ -213,12 +222,21 @@ class RadialMixedTP(nnx.Module):
         self.uniform_1d = nnx.static(uniform_1d)
         self.channelwise = nnx.static(channelwise)
         self.init_channel_first = nnx.static(uniform_1d)
-        self.flat_terms = nnx.static(flat_terms)
+        path_idx, init_idx, iter_idx, out_idx, coefficients = flat_terms
+        self.path_idx = nnx.static(np.asarray(path_idx, dtype=np.int32))
+        self.init_idx = nnx.static(np.asarray(init_idx, dtype=np.int32))
+        self.iter_idx = nnx.static(np.asarray(iter_idx, dtype=np.int32))
+        self.out_idx = nnx.static(np.asarray(out_idx, dtype=np.int32))
+        self.cg_coefficients = nnx.static(np.asarray(coefficients, dtype=np.dtype(dtype)))
         self.count_l = nnx.static(count_l)
         self.init_irreps = nnx.static(init_irreps)
         self.iter_irreps = nnx.static(iter_irreps)
         self.descriptor = nnx.static(descriptor)
         self.ir_dict_polynomial = nnx.static(ir_dict_polynomial)
+        self.weight_operand = nnx.static(weight_operand)
+        self.init_descriptors = nnx.static(init_descriptors)
+        self.iter_descriptors = nnx.static(iter_descriptors)
+        self.output_ir_descriptors = nnx.static(output_ir_descriptors)
         self.num_paths = nnx.static(num_weight_paths)
         self.weight_norm = nnx.static(1.0 if channelwise else 1.0 / np.sqrt(nwave))
         if channelwise:
@@ -273,33 +291,29 @@ class RadialMixedTP(nnx.Module):
     def _call_uniform_1d(self, init_orb, iter_orb, spec_indices, dtype):
         num_nodes = init_orb.shape[0]
         polynomial = self.ir_dict_polynomial
-        weight_operand = polynomial.inputs[0]
         weights = (self.weights[spec_indices] * self.weight_norm).reshape(
-            (num_nodes, weight_operand.num_segments) + weight_operand.segment_shape
+            (num_nodes, self.weight_operand.num_segments) + self.weight_operand.segment_shape
         )
-        num_init = len(self.init_irreps)
-        init_descriptors = polynomial.inputs[1 : 1 + num_init]
-        iter_descriptors = polynomial.inputs[1 + num_init :]
         init_dict = self._to_ir_dict(
             init_orb,
             self.rmaxl,
             self.init_irreps,
             UNIFORM_LAYOUT,
-            init_descriptors,
+            self.init_descriptors,
         )
         iter_dict = self._to_ir_dict(
             iter_orb,
             self.prmaxl,
             self.iter_irreps,
             LAYOUT,
-            iter_descriptors,
+            self.iter_descriptors,
         )
         out_template = {
             ir: jax.ShapeDtypeStruct(
                 (num_nodes, desc.num_segments) + desc.segment_shape,
                 jnp.dtype(dtype),
             )
-            for (_, ir), desc in zip(self.iter_irreps, polynomial.outputs)
+            for (_, ir), desc in self.output_ir_descriptors
         }
         output = cuex.ir_dict.segmented_polynomial_uniform_1d(
             polynomial,
@@ -317,33 +331,26 @@ class RadialMixedTP(nnx.Module):
             (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
             dtype=dtype,
         )
-        path_idx, init_idx, iter_idx, out_idx, coefficients = self.flat_terms
-        path_idx = jnp.asarray(path_idx, dtype=jnp.int32)
-        init_idx = jnp.asarray(init_idx, dtype=jnp.int32)
-        iter_idx = jnp.asarray(iter_idx, dtype=jnp.int32)
-        out_idx = jnp.asarray(out_idx, dtype=jnp.int32)
-        cg = jnp.asarray(coefficients, dtype=dtype)
-
-        init_terms = init_orb[:, init_idx, :]
-        iter_terms = iter_orb[:, iter_idx, :]
+        init_terms = init_orb[:, self.init_idx, :]
+        iter_terms = iter_orb[:, self.iter_idx, :]
         if self.channelwise:
             path_output = jnp.einsum(
                 "ntu,ntu,ntu,t->ntu",
-                weights[:, path_idx],
+                weights[:, self.path_idx],
                 init_terms,
                 iter_terms,
-                cg,
+                self.cg_coefficients,
             )
         else:
             path_output = jnp.einsum(
                 "ntuv,ntu,ntv,t->ntv",
-                weights[:, path_idx],
+                weights[:, self.path_idx],
                 init_terms,
                 iter_terms,
-                cg,
+                self.cg_coefficients,
             )
         node_indices = jnp.arange(num_nodes)[:, None]
-        output = output.at[node_indices, out_idx[None, :], :].add(path_output)
+        output = output.at[node_indices, self.out_idx[None, :], :].add(path_output)
         return output
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
