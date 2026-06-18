@@ -97,6 +97,24 @@ def flatten_cg_paths(paths):
     )
 
 
+def _readonly_array(values, dtype):
+    array = np.asarray(values, dtype=dtype)
+    array.setflags(write=False)
+    return array
+
+
+class _StaticFlatTerms:
+    __slots__ = ("path_idx", "init_idx", "iter_idx", "out_idx", "cg_coefficients")
+
+    def __init__(self, flat_terms, dtype):
+        path_idx, init_idx, iter_idx, out_idx, coefficients = flat_terms
+        self.path_idx = _readonly_array(path_idx, np.int32)
+        self.init_idx = _readonly_array(init_idx, np.int32)
+        self.iter_idx = _readonly_array(iter_idx, np.int32)
+        self.out_idx = _readonly_array(out_idx, np.int32)
+        self.cg_coefficients = _readonly_array(coefficients, np.dtype(dtype))
+
+
 class RadialMixedTP(nnx.Module):
     def __init__(
         self,
@@ -121,12 +139,7 @@ class RadialMixedTP(nnx.Module):
         self.tp_mode = nnx.static(tp_mode)
         self.channelwise = nnx.static(channelwise)
         self.init_channel_first = nnx.static(False)
-        path_idx, init_idx, iter_idx, out_idx, coefficients = flat_terms
-        self.path_idx = nnx.static(np.asarray(path_idx, dtype=np.int32))
-        self.init_idx = nnx.static(np.asarray(init_idx, dtype=np.int32))
-        self.iter_idx = nnx.static(np.asarray(iter_idx, dtype=np.int32))
-        self.out_idx = nnx.static(np.asarray(out_idx, dtype=np.int32))
-        self.cg_coefficients = nnx.static(np.asarray(coefficients, dtype=np.dtype(dtype)))
+        self.flat_terms = nnx.static(_StaticFlatTerms(flat_terms, dtype))
         self.count_l = nnx.static(count_l)
         self.num_paths = nnx.static(num_weight_paths)
         self.weight_norm = nnx.static(1.0 if channelwise else 1.0 / np.sqrt(nwave))
@@ -166,26 +179,27 @@ class RadialMixedTP(nnx.Module):
             (num_nodes, self.prmaxl * self.prmaxl, self.nwave),
             dtype=dtype,
         )
-        init_terms = init_orb[:, self.init_idx, :]
-        iter_terms = iter_orb[:, self.iter_idx, :]
+        terms = self.flat_terms
+        init_terms = init_orb[:, terms.init_idx, :]
+        iter_terms = iter_orb[:, terms.iter_idx, :]
         if self.channelwise:
             path_output = jnp.einsum(
                 "ntu,ntu,ntu,t->ntu",
-                weights[:, self.path_idx],
+                weights[:, terms.path_idx],
                 init_terms,
                 iter_terms,
-                self.cg_coefficients,
+                terms.cg_coefficients,
             )
         else:
             path_output = jnp.einsum(
                 "ntuv,ntu,ntv,t->ntv",
-                weights[:, self.path_idx],
+                weights[:, terms.path_idx],
                 init_terms,
                 iter_terms,
-                self.cg_coefficients,
+                terms.cg_coefficients,
             )
         node_indices = jnp.arange(num_nodes)[:, None]
-        output = output.at[node_indices, self.out_idx[None, :], :].add(path_output)
+        output = output.at[node_indices, terms.out_idx[None, :], :].add(path_output)
         return output
 
     def __call__(self, init_orb, iter_orb, spec_indices, dtype):
