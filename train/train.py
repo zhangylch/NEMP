@@ -22,6 +22,14 @@ import json
 from typing import Optional, Any
 
 
+def normalize_apply_if_finite_state(opt_state):
+    if hasattr(opt_state, "_replace") and hasattr(opt_state, "last_finite"):
+        return opt_state._replace(
+            last_finite=jnp.asarray(opt_state.last_finite, dtype=jnp.bool_)
+        )
+    return opt_state
+
+
 # train function
 def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop, start_step):
 
@@ -118,6 +126,7 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             
             if restored is not None:
                 start_step, params, ema_params, opt_state, _ = restored
+                opt_state = normalize_apply_if_finite_state(opt_state)
                 params = device_put_pmap_replicated(params, devices)
                 ema_params = device_put_pmap_replicated(ema_params, devices)
                 opt_state = device_put_pmap_replicated(opt_state, devices)
@@ -291,7 +300,7 @@ optim = optax.apply_if_finite(
     max_consecutive_errors=5,
 )
 
-opt_state = optim.init(params)
+opt_state = normalize_apply_if_finite_state(optim.init(params))
 lr_state = schedule_fn.init(params)
     
 
@@ -312,6 +321,7 @@ if full_config.restart:
     )
     
     start_step, params, ema_params, opt_state, _ = restored
+    opt_state = normalize_apply_if_finite_state(opt_state)
     params = device_put_pmap_replicated(params, devices)
     ema_params = device_put_pmap_replicated(ema_params, devices)
     opt_state = device_put_pmap_replicated(opt_state, devices)
