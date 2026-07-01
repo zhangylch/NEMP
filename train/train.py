@@ -22,6 +22,17 @@ import json
 from typing import Optional, Any
 
 
+def zero_nonfinite_gradients(grads):
+    def clean_leaf(grad):
+        if grad is None or not hasattr(grad, "dtype"):
+            return grad
+        if not jnp.issubdtype(grad.dtype, jnp.inexact):
+            return grad
+        return jnp.where(jnp.isfinite(grad), grad, jnp.zeros_like(grad))
+
+    return jax.tree_util.tree_map(clean_leaf, grads)
+
+
 # train function
 def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, value_and_grad_fn, value_fn, data_load, warm_lr, slr, elr, warm_epoch, Epoch, ncyc, ntrain, nval, nprop, start_step):
 
@@ -33,7 +44,9 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
                 params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn = carry
                 inabprop = (iabprop[i] for iabprop in abprop)
                 loss, grads = value_and_grad_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], celllist[i], shiftimage[i], center_factor[i], species[i], numatoms[i], inabprop, weight)
+                grads = zero_nonfinite_gradients(grads)
                 grads = jax.lax.pmean(grads, axis_name="train_GPUs")
+                grads = zero_nonfinite_gradients(grads)
                 updates, opt_state = optim.update(grads, opt_state, params)
                 updates = otu.tree_scalar_mul(scale, updates)
                 params = optax.apply_updates(params, updates)
