@@ -65,6 +65,7 @@ class ResidualBlock(nnx.Module):
         features: int,
         layers_per_block: int,
         cst: float,
+        scale: float,
         use_bias: bool,
         dtype: jnp.dtype,
         *,
@@ -72,6 +73,7 @@ class ResidualBlock(nnx.Module):
     ):
         self.features = features
         self.layers_per_block = layers_per_block
+        self.residual_scale = float(scale)
         self.dtype = dtype
 
         self.layers = nnx.List(
@@ -95,8 +97,11 @@ class ResidualBlock(nnx.Module):
             x = jax.nn.silu(x)
             x = layer(x)
 
-        sqrt_2 = jnp.sqrt(jnp.array(2.0, dtype=self.dtype))
-        x = (x + residual) / sqrt_2
+        residual_scale = jnp.array(self.residual_scale, dtype=self.dtype)
+        residual_norm = jnp.sqrt(
+            jnp.array(1.0, dtype=self.dtype) + residual_scale * residual_scale
+        )
+        x = (x + residual * residual_norm) / residual_norm
         return x
 
 
@@ -144,6 +149,7 @@ class MLP(nnx.Module):
                         features=features,
                         layers_per_block=layers_per_block,
                         cst=cst,
+                        scale=float(num_blocks),
                         use_bias=use_bias,
                         dtype=dtype,
                         rngs=rngs,
