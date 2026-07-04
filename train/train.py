@@ -130,7 +130,8 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             )
             
             if restored is not None:
-                start_step, params, ema_params, opt_state, _ = restored
+                start_step, params, ema_params, _, _ = restored
+                opt_state = optim.init(params)
                 params = device_put_pmap_replicated(params, devices)
                 ema_params = device_put_pmap_replicated(ema_params, devices)
                 opt_state = device_put_pmap_replicated(opt_state, devices)
@@ -319,11 +320,13 @@ if full_config.restart:
         full_config.ckpath, 
         devices
     )
-    
-    start_step, params, ema_params, opt_state, _ = restored
-    params = device_put_pmap_replicated(params, devices)
-    ema_params = device_put_pmap_replicated(ema_params, devices)
-    opt_state = device_put_pmap_replicated(opt_state, devices)
+
+    if restored is not None:
+        start_step, params, ema_params, _, _ = restored
+        opt_state = optim.init(params)
+        params = device_put_pmap_replicated(params, devices)
+        ema_params = device_put_pmap_replicated(ema_params, devices)
+        opt_state = device_put_pmap_replicated(opt_state, devices)
     
 
 
