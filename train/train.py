@@ -3,9 +3,10 @@ import os
 import sys
 import pickle
 import math
+import time
 import numpy as np
-import train_model.MPNN as MPNN
 from src.params import *
+import train_model.MPNN as MPNN
 import dataloader.dataloader as dataloader
 import dataloader.cudaloader as cudaloader
 import src.print_info as print_info
@@ -15,10 +16,21 @@ from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from jax import vmap, jit
 from optax import tree_utils as otu
 from src.data_config import ModelConfig
+from src.jax_sharding import device_put_pmap_replicated, get_jax_devices
 from dataclasses import replace, asdict
 import json
 from typing import Optional, Any
 
+
+def zero_nonfinite_gradients(grads):
+    def clean_leaf(grad):
+        if grad is None or not hasattr(grad, "dtype"):
+            return grad
+        if not jnp.issubdtype(grad.dtype, jnp.inexact):
+            return grad
+        return jnp.where(jnp.isfinite(grad), grad, jnp.zeros_like(grad))
+
+    return jax.tree_util.tree_map(clean_leaf, grads)
 
 
 # train function
@@ -32,7 +44,9 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
                 params, opt_state, ema_params, scale, weight, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop, loss_fn = carry
                 inabprop = (iabprop[i] for iabprop in abprop)
                 loss, grads = value_and_grad_fn(params, coor[i], cell[i], disp_cell[i], neighlist[i], celllist[i], shiftimage[i], center_factor[i], species[i], numatoms[i], inabprop, weight)
+                grads = zero_nonfinite_gradients(grads)
                 grads = jax.lax.pmean(grads, axis_name="train_GPUs")
+                grads = zero_nonfinite_gradients(grads)
                 updates, opt_state = optim.update(grads, opt_state, params)
                 updates = otu.tree_scalar_mul(scale, updates)
                 params = optax.apply_updates(params, updates)
@@ -67,7 +81,7 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             return loss_out, ploss_out
         return get_loss
 
-    devices = jax.local_devices()
+    devices = get_jax_devices(full_config.local_size)
     train_ens = jax.pmap(train_loop(ncyc), axis_name="train_GPUs")
     val_ens = jax.pmap(val_loop(ncyc), axis_name="val_GPUs")
 
@@ -76,21 +90,21 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
     best_loss = jnp.sum(jnp.array([1e20]))
 
    
-    scale = jax.device_put_replicated(warm_lr / slr, devices)
+    scale = device_put_pmap_replicated(warm_lr / slr, devices)
     max_scale =  slr / warm_lr
-    weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
-    init_weight = jax.device_put_replicated(jnp.array(full_config.init_weight), devices)
-    final_weight = jax.device_put_replicated(jnp.array(full_config.final_weight), devices)
-    ones_replicated = jax.device_put_replicated(jnp.array(1.0), devices)
+    weight = device_put_pmap_replicated(jnp.array(full_config.init_weight), devices)
+    init_weight = device_put_pmap_replicated(jnp.array(full_config.init_weight), devices)
+    final_weight = device_put_pmap_replicated(jnp.array(full_config.final_weight), devices)
+    ones_replicated = device_put_pmap_replicated(jnp.array(1.0), devices)
     for iepoch in range(Epoch): 
 
-        loss_train = jnp.zeros(full_config.local_size)
+        loss_train = device_put_pmap_replicated(jnp.array(0.0), devices)
         for data in data_load:
             params, opt_state, ema_params, loss_train = train_ens(params, opt_state, ema_params, scale, loss_train, weight, data)
         out_train = jnp.sqrt(jnp.sum(loss_train) / ntrain)
 
-        loss_val = jnp.zeros(full_config.local_size)
-        ploss_val = jnp.zeros((full_config.local_size, nprop))
+        loss_val = device_put_pmap_replicated(jnp.array(0.0), devices)
+        ploss_val = device_put_pmap_replicated(jnp.zeros((nprop,)), devices)
         for data in data_load:
             loss_val, ploss_val = val_ens(ema_params, scale, loss_val, ploss_val, weight, data)
         out_val = jnp.sqrt(jnp.sum(loss_val) / nval)
@@ -116,10 +130,11 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             )
             
             if restored is not None:
-                start_step, params, ema_params, opt_state, _ = restored
-                params = jax.device_put_replicated(params, devices)
-                ema_params = jax.device_put_replicated(ema_params, devices)
-                opt_state = jax.device_put_replicated(opt_state, devices)
+                start_step, params, ema_params, _, _ = restored
+                opt_state = optim.init(params)
+                params = device_put_pmap_replicated(params, devices)
+                ema_params = device_put_pmap_replicated(ema_params, devices)
+                opt_state = device_put_pmap_replicated(opt_state, devices)
     
 
         if out_val < best_loss:
@@ -136,7 +151,7 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
                 opt_state=ave_opt_state, 
                 config=config, 
                 ckpt_dir=full_config.ckpath,
-                max_to_keep=5  # <--- 只保留最近 5 个，自动删除更早的
+                max_to_keep=5  # keep the latest checkpoints
             )
 
             print(f"Step {start_step}: Saved checkpoint")
@@ -173,6 +188,7 @@ elif full_config.force_table:
 final_weight = jnp.array(full_config.final_weight[:nprop])
 init_weight = jnp.array(full_config.init_weight[:nprop])
 
+get_jax_devices(full_config.local_size, log=True)
 data_load = cudaloader.CudaDataLoader(data_load, queue_size=full_config.queue_size)
 for data in data_load:
     pass
@@ -187,7 +203,7 @@ coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, a
 initdata = (coor[0], cell[0], jnp.zeros_like(cell[0]), neighlist[0], celllist[0], shiftimage[0], center_factor[0], species[0])
 
 #=================================================Equi MPNN===================================================================
-config = ModelConfig(nspec=nspec, num_cg=num_cg, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, count_l=count_l, index_l=index_l, index_i1=index_i1, index_i2=index_i2, ens_cg=ens_cg, index_add=index_add, index_den=index_den, index_squ=index_squ, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
+config = ModelConfig(nspec=nspec, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, index_l=index_l, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, tp_method=full_config.tp_method, tp_mode=full_config.tp_mode, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
 
 model = MPNN.MPNN(config)
 
@@ -279,8 +295,11 @@ value_fn = make_loss(pes_model, nprop)
 
 schedule_fn = optax.contrib.reduce_on_plateau(factor=full_config.decay_factor, patience=full_config.patience_step, cooldown=full_config.cooldown, min_scale=full_config.elr/full_config.slr)
 
-#optim = optax.amsgrad(learning_rate=slr)
-optim = optax.chain(optax.add_decayed_weights(full_config.weight_decay), optax.clip_by_global_norm(full_config.clip_norm), optax.amsgrad(learning_rate=full_config.slr))
+optim = optax.chain(
+    optax.add_decayed_weights(full_config.weight_decay),
+    optax.clip_by_global_norm(full_config.clip_norm),
+    optax.amsgrad(learning_rate=full_config.slr),
+)
 
 opt_state = optim.init(params)
 lr_state = schedule_fn.init(params)
@@ -292,20 +311,22 @@ ferr.write(time.strftime("%Y-%m-%d-%H_%M_%S \n", time.localtime()))
 
                                     
 start_step = 0
-devices = jax.local_devices()
-params = jax.device_put_replicated(params, devices)
+devices = get_jax_devices(full_config.local_size)
+params = device_put_pmap_replicated(params, devices)
 ema_params = params
-opt_state = jax.device_put_replicated(opt_state, devices)
+opt_state = device_put_pmap_replicated(opt_state, devices)
 if full_config.restart:
     restored = restore_checkpoint(
         full_config.ckpath, 
         devices
     )
-    
-    start_step, params, ema_params, opt_state, _ = restored
-    params = jax.device_put_replicated(params, devices)
-    ema_params = jax.device_put_replicated(ema_params, devices)
-    opt_state = jax.device_put_replicated(opt_state, devices)
+
+    if restored is not None:
+        start_step, params, ema_params, _, _ = restored
+        opt_state = optim.init(params)
+        params = device_put_pmap_replicated(params, devices)
+        ema_params = device_put_pmap_replicated(ema_params, devices)
+        opt_state = device_put_pmap_replicated(opt_state, devices)
     
 
 

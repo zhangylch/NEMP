@@ -1,153 +1,182 @@
-from flax import linen as nn
-import jax.numpy as jnp
-from typing import Optional, List
+from flax import nnx
 import jax
+import jax.numpy as jnp
+import math
+from typing import Optional
 
-class ScaledDense(nn.Module):
+
+class ScaledDense(nnx.Module):
     """
-    A Dense layer with custom scaling. Its parameter shapes are defined
-    explicitly in setup() using in_features to be robust.
+    A Dense layer with custom scaling.
     """
-    in_features: int
-    features: int
-    cst: float = 1.0
-    use_bias: bool = False
-    bias_init_value: Optional[jnp.ndarray] = None
-    dtype: jnp.dtype = jnp.float32
 
-    def setup(self):
-        """Define parameters with explicit shapes to avoid data dependencies."""
-        self.scale = jnp.array(self.cst, dtype=self.dtype) / jnp.sqrt(jnp.array(self.in_features, dtype=self.dtype))
-        if self.use_bias:
-            self.scale = self.scale / jnp.array(1e2, dtype=self.dtype)
+    def __init__(
+        self,
+        in_features: int,
+        features: int,
+        cst: float = 1.0,
+        use_bias: bool = False,
+        bias_init_value: Optional[jnp.ndarray] = None,
+        dtype: jnp.dtype = jnp.float32,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.in_features = in_features
+        self.features = features
+        self.use_bias = use_bias
+        self.dtype = dtype
 
-        self.kernel = self.param(
-            'kernel',
-            nn.initializers.normal(1.0),
-            (self.in_features, self.features),
-            self.dtype
+        scale = cst / math.sqrt(in_features)
+        if use_bias:
+            scale = scale / 1e2
+        self.scale = float(scale)
+
+        self.kernel = nnx.Param(
+            nnx.initializers.normal(1.0)(rngs.params(), (in_features, features), dtype)
         )
 
-        if self.use_bias:
-            def bias_init_fn(rng):
-                if self.bias_init_value is not None:
-                    assert self.bias_init_value.shape == (self.features,), \
-                        f"bias_init_value shape mismatch, expected {(self.features,)}, got {self.bias_init_value.shape}"
-                    return self.bias_init_value.astype(self.dtype)
-                return jnp.zeros(self.features, dtype=self.dtype)
-            self.bias = self.param('bias', bias_init_fn)
+        if use_bias:
+            if bias_init_value is not None:
+                assert bias_init_value.shape == (features,), (
+                    f"bias_init_value shape mismatch, expected {(features,)}, "
+                    f"got {bias_init_value.shape}"
+                )
+                bias = bias_init_value.astype(dtype)
+            else:
+                bias = jnp.zeros(features, dtype=dtype)
+            self.bias = nnx.Param(bias)
 
     def __call__(self, x):
-        """Apply the pre-defined layers to the input."""
-        assert x.shape[-1] == self.in_features, f"Input shape {x.shape} does not match layer's in_features {self.in_features}"
-        
-        out = x @ (self.kernel * self.scale)
+        assert x.shape[-1] == self.in_features, (
+            f"Input shape {x.shape} does not match layer's in_features {self.in_features}"
+        )
+
+        out = x @ (self.kernel * jnp.array(self.scale, dtype=self.dtype))
         if self.use_bias:
             out += self.bias
         return out
 
 
-class ResidualBlock(nn.Module):
+class ResidualBlock(nnx.Module):
     """A self-contained residual block module."""
-    features: int
-    layers_per_block: int
-    cst: float
-    use_bias: bool
-    dtype: jnp.dtype
 
-    @nn.compact
+    def __init__(
+        self,
+        features: int,
+        layers_per_block: int,
+        cst: float,
+        scale: float,
+        use_bias: bool,
+        dtype: jnp.dtype,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.features = features
+        self.layers_per_block = layers_per_block
+        self.residual_scale = float(scale)
+        self.dtype = dtype
+
+        self.layers = nnx.List(
+            [
+                ScaledDense(
+                    in_features=features,
+                    features=features,
+                    cst=cst,
+                    use_bias=use_bias,
+                    dtype=dtype,
+                    rngs=rngs,
+                )
+                for _ in range(layers_per_block)
+            ]
+        )
+
     def __call__(self, x):
-        """Define and apply layers within the compact __call__."""
         residual = x
 
-        # This loop now works correctly under the parent's @nn.compact
-        for i in range(self.layers_per_block):
-            x = nn.silu(x)
-            x = ScaledDense(
-                in_features=x.shape[-1],
-                features=self.features,
-                cst=self.cst,
-                use_bias=self.use_bias,
-                name=f'layer_{i}',
-                dtype=self.dtype
-            )(x)
+        for layer in self.layers:
+            x = jax.nn.silu(x)
+            x = layer(x)
 
-        sqrt_2 = jnp.sqrt(jnp.array(2.0, dtype=self.dtype))
-        x = (x + residual) / sqrt_2
+        residual_scale = jnp.array(self.residual_scale, dtype=self.dtype)
+        residual_norm = jnp.sqrt(
+            jnp.array(1.0, dtype=self.dtype) + residual_scale * residual_scale
+        )
+        x = (x + residual * residual_norm) / residual_norm
         return x
 
 
-class MLP(nn.Module):
+class MLP(nnx.Module):
     """
-    A Multi-Layer Perceptron using the @nn.compact pattern consistently.
-    All layers are defined inline within the __call__ method.
+    A Multi-Layer Perceptron using Flax NNX.
     """
-    num_output: int = 1
-    num_blocks: int = 1
-    features: int = 128
-    layers_per_block: int = 2
-    cst: float = 1.0
-    use_bias: bool = False
-    use_linear: bool = False
-    bias_init_value: Optional[jnp.ndarray] = None
-    dtype: jnp.dtype = jnp.float32
-    
-    # This module now exclusively and correctly uses @nn.compact.
-    # There is no setup() method for defining layers.
-    @nn.compact
+
+    def __init__(
+        self,
+        in_features: int,
+        num_output: int = 1,
+        num_blocks: int = 1,
+        features: int = 128,
+        layers_per_block: int = 2,
+        cst: float = 1.0,
+        use_bias: bool = False,
+        use_linear: bool = False,
+        bias_init_value: Optional[jnp.ndarray] = None,
+        dtype: jnp.dtype = jnp.float32,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        self.in_features = in_features
+        self.num_output = num_output
+        self.num_blocks = num_blocks
+        self.features = features
+        self.layers_per_block = layers_per_block
+        self.use_linear = use_linear
+        self.dtype = dtype
+
+        if not use_linear:
+            self.input_layer = ScaledDense(
+                in_features=in_features,
+                features=features,
+                cst=cst,
+                use_bias=use_bias,
+                dtype=dtype,
+                rngs=rngs,
+            )
+
+            self.blocks = nnx.List(
+                [
+                    ResidualBlock(
+                        features=features,
+                        layers_per_block=layers_per_block,
+                        cst=cst,
+                        scale=float(num_blocks),
+                        use_bias=use_bias,
+                        dtype=dtype,
+                        rngs=rngs,
+                    )
+                    for _ in range(num_blocks)
+                ]
+            )
+
+            output_in_features = features
+        else:
+            output_in_features = in_features
+
+        self.output_layer = ScaledDense(
+            in_features=output_in_features,
+            features=num_output,
+            cst=1.0,
+            use_bias=use_bias,
+            bias_init_value=bias_init_value,
+            dtype=dtype,
+            rngs=rngs,
+        )
+
     def __call__(self, x):
         if not self.use_linear:
-            # Define input layer here
-            x = ScaledDense(
-                in_features=x.shape[-1],
-                features=self.features,
-                cst=self.cst,
-                use_bias=self.use_bias,
-                name='input_layer',
-                dtype=self.dtype
-            )(x)
+            x = self.input_layer(x)
+            for block in self.blocks:
+                x = block(x)
+            x = jax.nn.silu(x)
 
-            # Use a standard Python for-loop to instantiate blocks.
-            # @nn.compact ensures each block gets a unique name and parameters.
-            for i in range(self.num_blocks):
-                x = ResidualBlock(
-                    features=self.features,
-                    layers_per_block=self.layers_per_block,
-                    cst=self.cst,
-                    use_bias=self.use_bias,
-                    dtype=self.dtype,
-                    name=f'block_{i}'
-                )(x)
-
-            x = nn.silu(x)
-            x = ScaledDense(
-                in_features=x.shape[-1],
-                features=self.num_output,
-                cst=1.0,
-                use_bias=self.use_bias,
-                bias_init_value=self.bias_init_value,
-                name='output_layer',
-                dtype=self.dtype
-            )(x)
-        else:
-            # For the simple linear case, define the layer directly
-            #x = ScaledDense(
-            #    in_features=x.shape[-1],
-            #    features=self.features,
-            #    cst=1.0,
-            #    use_bias=self.use_bias,
-            #    bias_init_value=self.bias_init_value,
-            #    name='input_layer',
-            #    dtype=self.dtype
-            #)(x)
-
-            x = ScaledDense(
-                in_features=x.shape[-1],
-                features=self.num_output,
-                cst=1.0,
-                use_bias=self.use_bias,
-                bias_init_value=self.bias_init_value,
-                name='output_layer',
-                dtype=self.dtype
-            )(x)
-        return x
+        return self.output_layer(x)

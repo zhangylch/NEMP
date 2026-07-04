@@ -5,17 +5,16 @@ import jax
 import jax.numpy as jnp
 from jax_md import simulate, space, partition, quantity
 from jax import random, jit
-from flax import traverse_util
 import numpy as np
 import threading
 import queue
 import time
 from functools import partial
 import orbax.checkpoint as oc
-from src.data_config import ModelConfig
+from src.data_config import ModelConfig, checkpoint_tp_config
 from src.read_json import load_config
 from ASE.nemp.convert_type import convert_dtype
-import model.MPNN as MPNN
+import inference_model.MPNN as MPNN
 import JAX_MD.build_neigh as build_neigh
 import fortran.jax_0_7_1.getneigh as getneigh
 
@@ -26,9 +25,7 @@ from ase.io import extxyz
 
 
 def stop_grad(variables):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    return jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
 
 
 #UNIT DEFINATION the default mass is amu, so if you use eV as your output energy unitand angstrom as the unit of your coordinates, then the unit of time is around 10.18fs
@@ -112,6 +109,7 @@ params = restored["params"]
 params = stop_grad(params)
 model_config = restored["config"]
 model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+model_config = checkpoint_tp_config(model_config, full_config)
 
 config = ModelConfig(**model_config)
 

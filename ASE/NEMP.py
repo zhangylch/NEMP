@@ -7,19 +7,16 @@ from ase.calculators.calculator import Calculator
 import numpy as np
 import ase.calculators.nemp.MPNN as MPNN
 from ase.calculators.nemp.convert_type import convert_dtype
-from ase.calculators.nemp.data_config import ModelConfig
+from ase.calculators.nemp.data_config import ModelConfig, checkpoint_tp_config
 from ase.calculators.nemp.read_json import load_config
 from ase.calculators.nemp.save_checkpoint import restore_checkpoint
 import orbax.checkpoint as oc
 from ase.calculators.calculator import (Calculator, all_changes,
                                         PropertyNotImplementedError)
-from flax import traverse_util
 
 def stop_grad(variables, dtype):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    new_vars = {k: v.astype(dtype) for k, v in new_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    variables = jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
+    return jax.tree.map(lambda v: v.astype(dtype) if hasattr(v, "astype") else v, variables)
 
 
 class NEMP(Calculator):
@@ -67,6 +64,7 @@ class NEMP(Calculator):
         checkpoint_data = restore_checkpoint(ckpath, devices)
         restored_step, params, ema_params, opt_state, model_config = checkpoint_data
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+        model_config = checkpoint_tp_config(model_config, full_config)
         config = ModelConfig(**model_config)
         model = MPNN.MPNN(config)
         self.params = stop_grad(ema_params, self.jnp_dtype)
