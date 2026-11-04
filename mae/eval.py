@@ -13,8 +13,9 @@ import dataloader.dataloader as dataloader
 import dataloader.cudaloader as cudaloader
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from src.save_checkpoint import restore_checkpoint
-from src.data_config import ModelConfig, checkpoint_tp_config
+from src.data_config import ModelConfig, checkpoint_params, checkpoint_tp_config
 from src.jax_sharding import device_put_pmap_replicated, get_jax_devices
 
 # Configure JAX precision.
@@ -57,20 +58,28 @@ if restored is not None:
 model_config = checkpoint_tp_config(model_config, full_config)
 config = ModelConfig(**model_config)
 
-model = MPNN.MPNN(config)
+model = MPNN.MPNN(config, rngs=nnx.Rngs(0))
+graphdef, params_template = nnx.split(model, nnx.Param)
+ema_params = checkpoint_params(ema_params, params_template)
+ema_params = device_put_pmap_replicated(ema_params, devices)
+
+
+def energy_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+    model = nnx.merge(graphdef, params)
+    return model(coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
 
 if full_config.stress_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        (_, ene), (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        (_, ene), (force, stress) = jax.value_and_grad(energy_model, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         volume = jnp.sum(cell[:, 0] * jnp.cross(cell[:, 1], cell[:, 2]), axis=-1)
         return ene, force, stress/volume[:, None, None]*jnp.array(full_config.stress_sign)
 elif full_config.force_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        (_, ene), force = jax.value_and_grad(model.apply, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        (_, ene), force = jax.value_and_grad(energy_model, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         return ene, force
 else:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        _, ene = model.apply(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        _, ene = energy_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         return ene,
 
 def make_loss(pes_model, nprop):

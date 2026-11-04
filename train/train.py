@@ -11,11 +11,12 @@ import dataloader.dataloader as dataloader
 import dataloader.cudaloader as cudaloader
 import src.print_info as print_info
 import optax
+from flax import nnx
 from src.print_params import print_params
 from src.save_checkpoint import save_checkpoint, restore_checkpoint
 from jax import vmap, jit
 from optax import tree_utils as otu
-from src.data_config import ModelConfig
+from src.data_config import ModelConfig, checkpoint_params
 from src.jax_sharding import device_put_pmap_replicated, get_jax_devices
 from dataclasses import replace, asdict
 import json
@@ -131,6 +132,8 @@ def train(params, ema_params, config, optim, opt_state, lr_state, schedule_fn, v
             
             if restored is not None:
                 start_step, params, ema_params, _, _ = restored
+                params = checkpoint_params(params, params_template)
+                ema_params = checkpoint_params(ema_params, params_template)
                 opt_state = optim.init(params)
                 params = device_put_pmap_replicated(params, devices)
                 ema_params = device_put_pmap_replicated(ema_params, devices)
@@ -196,20 +199,17 @@ for data in data_load:
 for data in data_load:
     pass
 
-get_gpu0_data_op = lambda sharded_array: sharded_array[0]
-data_on_gpu0_pytree = jax.tree.map(get_gpu0_data_op, data)
-coor, cell, neighlist, celllist, shiftimage, center_factor, species, numatoms, abprop = data_on_gpu0_pytree
-
-initdata = (coor[0], cell[0], jnp.zeros_like(cell[0]), neighlist[0], celllist[0], shiftimage[0], center_factor[0], species[0])
-
 #=================================================Equi MPNN===================================================================
 config = ModelConfig(nspec=nspec, emb_nl=full_config.emb_nl, MP_nl=full_config.MP_nl, radial_nl=full_config.radial_nl, out_nl=full_config.out_nl, reduce_spec=reduce_spec, com_spec=com_spec, index_l=index_l, initbias_neigh=initbias_neigh, cutoff=full_config.cutoff, npaircode=full_config.npaircode, nradial=full_config.nradial, nwave=full_config.nwave, rmaxl=rmaxl, prmaxl=prmaxl, MP_loop=full_config.MP_loop, pn=full_config.pn, tp_method=full_config.tp_method, tp_mode=full_config.tp_mode, use_norm=full_config.use_norm, use_bias=full_config.use_bias, std=force_std, cst=1.67462)
 
-model = MPNN.MPNN(config)
+model = MPNN.MPNN(config, rngs=nnx.Rngs(key[1]))
+graphdef, params = nnx.split(model, nnx.Param)
+params_template = params
 
-params_rng = {"params": key[1]}
 
-params = model.init(params_rng, *initdata)
+def energy_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
+    model = nnx.merge(graphdef, params)
+    return model(coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
 
 print("NN structure for pes")
 print_params(params)
@@ -220,16 +220,16 @@ print_params(params)
 
 if full_config.stress_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        (_, ene), (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        (_, ene), (force, stress) = jax.value_and_grad(energy_model, argnums=[1, 3], has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         volume = jnp.sum(cell[:, 0] * jnp.cross(cell[:, 1], cell[:, 2]), axis=-1)
         return ene, force, stress/volume[:, None, None]*jnp.array(full_config.stress_sign)
 elif full_config.force_table:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        (_, ene), force = jax.value_and_grad(model.apply, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        (_, ene), force = jax.value_and_grad(energy_model, argnums=1, has_aux=True)(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         return ene, force
 else:
     def pes_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species):
-        _, ene = model.apply(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
+        _, ene = energy_model(params, coor, cell, disp_cell, neighlist, celllist, shiftimage, center_factor, species)
         return ene,
 
 def make_gradient(energy_model):
@@ -323,6 +323,8 @@ if full_config.restart:
 
     if restored is not None:
         start_step, params, ema_params, _, _ = restored
+        params = checkpoint_params(params, params_template)
+        ema_params = checkpoint_params(ema_params, params_template)
         opt_state = optim.init(params)
         params = device_put_pmap_replicated(params, devices)
         ema_params = device_put_pmap_replicated(ema_params, devices)

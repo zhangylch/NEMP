@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import optax
+from flax import nnx
 
 import train_model.MPNN as MPNN
 from low_level import sparse_tp
@@ -34,9 +35,10 @@ def _minimal_config():
     )
 
 
-def test_nnx_mpnn_init_apply_and_grad():
+def test_nnx_mpnn_native_call_and_grad():
     config = _minimal_config()
-    model = MPNN.MPNN(config)
+    model = MPNN.MPNN(config, rngs=nnx.Rngs(0))
+    graphdef, params = nnx.split(model, nnx.Param)
 
     cart = jnp.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=jnp.float32)
     cell = jnp.eye(3, dtype=jnp.float32)[None, :, :] * 8.0
@@ -47,19 +49,7 @@ def test_nnx_mpnn_init_apply_and_grad():
     center_factor = jnp.ones((2,), dtype=jnp.float32)
     species = jnp.array([1, 1])
 
-    params = model.init(
-        {"params": jax.random.PRNGKey(0)},
-        cart,
-        cell,
-        disp_cell,
-        neighlist,
-        celllist,
-        shiftimage,
-        center_factor,
-        species,
-    )
-    total_energy, graph_energy = model.apply(
-        params,
+    total_energy, graph_energy = model(
         cart,
         cell,
         disp_cell,
@@ -74,8 +64,7 @@ def test_nnx_mpnn_init_apply_and_grad():
     assert graph_energy.shape == (1,)
     assert jnp.isfinite(total_energy)
 
-    grad_cart = jax.grad(lambda x: model.apply(
-        params,
+    grad_cart = jax.grad(lambda x: model(
         x,
         cell,
         disp_cell,
@@ -88,8 +77,7 @@ def test_nnx_mpnn_init_apply_and_grad():
     assert grad_cart.shape == cart.shape
 
     def loss_fn(model_params):
-        return model.apply(
-            model_params,
+        return nnx.merge(graphdef, model_params)(
             cart,
             cell,
             disp_cell,
@@ -133,7 +121,7 @@ def test_nnx_mpnn_nonperiodic_rotation_invariant_energy_and_force():
         MP_loop=1,
         pn=2,
     )
-    model = MPNN.MPNN(config)
+    model = MPNN.MPNN(config, rngs=nnx.Rngs(1))
 
     cart = jnp.array(
         [
@@ -171,21 +159,8 @@ def test_nnx_mpnn_nonperiodic_rotation_invariant_energy_and_force():
     rot = jnp.eye(3, dtype=dtype) + jnp.sin(angle) * kx + (1.0 - jnp.cos(angle)) * (kx @ kx)
     rotated_cart = cart @ rot.T
 
-    params = model.init(
-        {"params": jax.random.PRNGKey(1)},
-        cart,
-        cell,
-        disp_cell,
-        neighlist,
-        celllist,
-        shiftimage,
-        center_factor,
-        species,
-    )
-
     def energy_fn(x):
-        return model.apply(
-            params,
+        return model(
             x,
             cell,
             disp_cell,

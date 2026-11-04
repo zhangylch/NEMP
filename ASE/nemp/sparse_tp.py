@@ -3,8 +3,8 @@ import numpy as np
 from flax import nnx
 from jax.ops import segment_sum
 
-from ASE.nemp import cg_cal
-from ASE.nemp import sph_cal
+from . import cg_cal
+from . import sph_cal
 
 
 def normalize_tp_method(tp_method):

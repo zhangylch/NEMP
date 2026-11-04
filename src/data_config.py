@@ -2,6 +2,20 @@ from jax import vmap, jit
 from typing import Sequence, List, Union, Any
 from dataclasses import field, dataclass
 from jax import Array
+import jax
+from flax import nnx
+from collections.abc import Mapping
+
+
+def checkpoint_params(params, template):
+    """Restore a checkpoint's parameter mapping into the model's NNX state."""
+    if isinstance(params, Mapping) and "params" in params and len(params) == 1:
+        params = params["params"]
+    if isinstance(params, nnx.State):
+        return params
+    state = jax.tree.map(lambda value: value, template)
+    nnx.replace_by_pure_dict(state, params)
+    return state
 
 
 def _normalized_tp_value(name, value):

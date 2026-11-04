@@ -1,55 +1,13 @@
 import numpy as np
-import jax
 import jax.numpy as jnp
 from flax import nnx
 from jax.ops import segment_sum
-from collections.abc import Mapping
-from ASE.nemp import sparse_tp
-from ASE.nemp.data_config import ModelConfig
-from ASE.nemp import MLP
+from . import sparse_tp
+from .data_config import ModelConfig
+from . import MLP
 
 
-def _as_rngs(rngs):
-    if isinstance(rngs, nnx.Rngs):
-        return rngs
-    if isinstance(rngs, Mapping):
-        rngs = rngs.get("params", rngs.get("default"))
-    return nnx.Rngs(rngs)
-
-
-def _tp_backend(tp_method):
-    method = sparse_tp.normalize_tp_method(tp_method)
-    if method == "uniform_1d":
-        from ASE.nemp import cueq_tp
-
-        return method, cueq_tp
-    return method, sparse_tp
-
-
-def _make_tp_layer(tp_method, tp_backend, config, dtype, rngs):
-    if tp_method == "uniform_1d":
-        return tp_backend.RadialMixedTP(
-            config.nspec,
-            config.nwave,
-            config.rmaxl,
-            config.prmaxl,
-            dtype,
-            tp_method,
-            config.tp_mode,
-            rngs=rngs,
-        )
-    return tp_backend.RadialMixedTP(
-        config.nspec,
-        config.nwave,
-        config.rmaxl,
-        config.prmaxl,
-        dtype,
-        config.tp_mode,
-        rngs=rngs,
-    )
-
-
-class MPNNCore(nnx.Module):
+class MPNN(nnx.Module):
     """
     NNX implementation of the single-graph ASE model.
     """
@@ -73,15 +31,25 @@ class MPNNCore(nnx.Module):
                 dtype,
             )
         )
-        tp_method, tp_backend = _tp_backend(config.tp_method)
+        tp_method = sparse_tp.normalize_tp_method(config.tp_method)
+        if tp_method == "uniform_1d":
+            from . import cueq_tp
+
+            tp_backend = cueq_tp
+            self.tp_layers = nnx.List([
+                cueq_tp.RadialMixedTP(config.nspec, config.nwave, config.rmaxl,
+                                     config.prmaxl, dtype, tp_method, config.tp_mode, rngs=rngs)
+                for _ in range(config.MP_loop)
+            ])
+        else:
+            tp_backend = sparse_tp
+            self.tp_layers = nnx.List([
+                sparse_tp.RadialMixedTP(config.nspec, config.nwave, config.rmaxl,
+                                       config.prmaxl, dtype, config.tp_mode, rngs=rngs)
+                for _ in range(config.MP_loop)
+            ])
         self.tp_method = nnx.static(tp_method)
-        self.normalized_spherical_harmonics = nnx.static(
-            tp_backend.normalized_spherical_harmonics
-        )
-        self.tp_layers = nnx.List([
-            _make_tp_layer(tp_method, tp_backend, config, dtype, rngs)
-            for _ in range(config.MP_loop)
-        ])
+        self.normalized_spherical_harmonics = nnx.static(tp_backend.normalized_spherical_harmonics)
 
         com_spec_features = config.com_spec.shape[-1]
         self.neighcoeffnn = MLP.MLP(
@@ -367,40 +335,3 @@ class MPNNCore(nnx.Module):
         center_orbital = (center_orbital + iter_orb) / jnp.sqrt(dtype_2)
 
         return center_orbital
-
-
-class MPNN:
-    """
-    Compatibility wrapper exposing the previous Linen-style init/apply API.
-    Internally this runs the NNX MPNNCore via split/merge.
-    """
-
-    def __init__(self, config: ModelConfig):
-        self.config = config
-        self.graphdef = self._make_graphdef()
-
-    def _build(self, rngs):
-        return MPNNCore(self.config, rngs=rngs)
-
-    def _make_graphdef(self):
-        graphdef, _ = nnx.split(self._build(nnx.Rngs(0)), nnx.Param)
-        return graphdef
-
-    def init(self, rngs, *args, **kwargs):
-        graphdef, params = nnx.split(self._build(_as_rngs(rngs)), nnx.Param)
-        self.graphdef = graphdef
-        return params
-
-    def _state_from_params(self, params):
-        if isinstance(params, Mapping) and "params" in params and len(params) == 1:
-            params = params["params"]
-        if isinstance(params, nnx.State):
-            return params
-
-        state = nnx.state(self._build(nnx.Rngs(0)), nnx.Param)
-        nnx.replace_by_pure_dict(state, params)
-        return state
-
-    def apply(self, params, *args, **kwargs):
-        model = nnx.merge(self.graphdef, self._state_from_params(params))
-        return model(*args, **kwargs)
