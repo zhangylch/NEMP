@@ -1,25 +1,22 @@
 import os
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from ase import Atoms
 from ase.stress import full_3x3_to_voigt_6_stress
 from ase.calculators.calculator import Calculator
 import numpy as np
-import ase.calculators.nemp.MPNN as MPNN
-from ase.calculators.nemp.convert_type import convert_dtype
-from ase.calculators.nemp.data_config import ModelConfig
-from ase.calculators.nemp.read_json import load_config
-from ase.calculators.nemp.save_checkpoint import restore_checkpoint
-import orbax.checkpoint as oc
+from .nemp import MPNN
+from .nemp.convert_type import convert_dtype
+from .nemp.data_config import ModelConfig, checkpoint_params, checkpoint_tp_config
+from .nemp.read_json import load_config
+from .nemp.save_checkpoint import restore_checkpoint
 from ase.calculators.calculator import (Calculator, all_changes,
                                         PropertyNotImplementedError)
-from flax import traverse_util
 
 def stop_grad(variables, dtype):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    new_vars = {k: v.astype(dtype) for k, v in new_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    variables = jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
+    return jax.tree.map(lambda v: v.astype(dtype) if hasattr(v, "astype") else v, variables)
 
 
 class NEMP(Calculator):
@@ -67,9 +64,11 @@ class NEMP(Calculator):
         checkpoint_data = restore_checkpoint(ckpath, devices)
         restored_step, params, ema_params, opt_state, model_config = checkpoint_data
         model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+        model_config = checkpoint_tp_config(model_config, full_config)
         config = ModelConfig(**model_config)
-        model = MPNN.MPNN(config)
-        self.params = stop_grad(ema_params, self.jnp_dtype)
+        model = MPNN.MPNN(config, rngs=nnx.Rngs(0))
+        graphdef, template_params = nnx.split(model, nnx.Param)
+        self.params = stop_grad(checkpoint_params(ema_params, template_params), self.jnp_dtype)
 
         #initialize the model
         cart = self.initialize_system(initatoms)
@@ -81,25 +80,24 @@ class NEMP(Calculator):
         positions, distvec,  skin_judge, neighlist, shifts = self.cut_neigh(positions, self.cell, self.neighlist, self.shifts, jnp.zeros((self.ghostneigh, 3)))
         self.skin_judge = skin_judge
         self.old_distvec = distvec
-        key = jax.random.PRNGKey(0)
-        params_rng = {"params": key}
-        data = (positions, self.cell, self.disp_cell, neighlist, shifts, self.center_factor, self.species)
-        tmp_params = model.init(params_rng, *data)
-        
+
+        def energy_fn(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
+            model = nnx.merge(graphdef, params)
+            return model(coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
 
         if 'forces' in properties and 'stress' not in properties:
             def get_e_f(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-                ene, force = jax.value_and_grad(model.apply, argnums=1)(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+                ene, force = jax.value_and_grad(energy_fn, argnums=1)(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
                 return ene, -force
             self.pes = jax.jit(get_e_f)
         elif 'stress' in properties:
             def get_e_f_s(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-                ene, (force, stress) = jax.value_and_grad(model.apply, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
+                ene, (force, stress) = jax.value_and_grad(energy_fn, argnums=[1, 3])(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species)
                 return ene, -force, stress
             self.pes = jax.jit(get_e_f_s)
         else:
             def get_energy(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species):
-                return model.apply(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
+                return energy_fn(params, coor, cell, disp_cell, neighlist, shiftimage, center_factor, species),
             self.pes = jax.jit(get_energy)
 
         

@@ -3,16 +3,16 @@ gpu_sel(1)
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from jax_md import simulate, space, partition, quantity
 from jax import random, jit
-from flax import traverse_util
 import numpy as np
 import threading
 import queue
 import time
 from functools import partial
 import orbax.checkpoint as oc
-from src.data_config import ModelConfig
+from src.data_config import ModelConfig, checkpoint_params, checkpoint_tp_config
 from src.read_json import load_config
 from ASE.nemp.convert_type import convert_dtype
 import inference_model.MPNN as MPNN
@@ -26,9 +26,7 @@ from ase.io import extxyz
 
 
 def stop_grad(variables):
-    flat_vars = traverse_util.flatten_dict(variables)
-    new_vars = {k: jax.lax.stop_gradient(v) for k, v in flat_vars.items()}
-    return traverse_util.unflatten_dict(new_vars)
+    return jax.tree.map(lambda v: jax.lax.stop_gradient(v), variables)
 
 
 #UNIT DEFINATION the default mass is amu, so if you use eV as your output energy unitand angstrom as the unit of your coordinates, then the unit of time is around 10.18fs
@@ -112,10 +110,13 @@ params = restored["params"]
 params = stop_grad(params)
 model_config = restored["config"]
 model_config = convert_dtype(model_config, jnp_dtype=full_config.jnp_dtype)
+model_config = checkpoint_tp_config(model_config, full_config)
 
 config = ModelConfig(**model_config)
 
-model = MPNN.MPNN(config)
+model = MPNN.MPNN(config, rngs=nnx.Rngs(0))
+graphdef, template_params = nnx.split(model, nnx.Param)
+params = checkpoint_params(params, template_params)
 
 neigh_fn = build_neigh.Neighlist(cutoff=full_config.cutoff, skin=skin, maxneigh=maxneigh, skin_neigh=skin_neigh, pbc=[1, 1, 1], getneigh=getneigh, jnp_dtype=full_config.jnp_dtype)
 
@@ -125,7 +126,8 @@ neighlist = jnp.array(neighlist)
 
 def energy_fn(positions, neighlist=neighlist):
     cut_neighlist, cut_shifts = neigh_fn.cut_neigh(positions, cell_gpu, neighlist)
-    return model.apply(params, positions, cell_gpu, disp_cell, jax.lax.stop_gradient(cut_neighlist), jax.lax.stop_gradient(cut_shifts), center_factor, species)
+    model = nnx.merge(graphdef, params)
+    return model(positions, cell_gpu, disp_cell, jax.lax.stop_gradient(cut_neighlist), jax.lax.stop_gradient(cut_shifts), center_factor, species)
 
 init_fn, apply_fn = simulate.nvt_nose_hoover(energy_fn, shift_fn, time_step, target_temp, tau=tau)
 

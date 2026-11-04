@@ -5,7 +5,7 @@ elif sys.argv[1]=="rmse":
     import rmse.eval
 elif sys.argv[1]=="train":
     import train.train
-elif sys.argv[1]=="jax_md":
-    import JAX_MD.md
-elif sys.argv[1]=="jax_md_as":
-    import JAX_MD_AS.md
+elif sys.argv[1]=="jax_md" or sys.argv[1]=="jax_md_nvt":
+    import JAX_MD.nvt
+elif sys.argv[1]=="jax_md_nve":
+    import JAX_MD.nve

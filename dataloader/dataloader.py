@@ -112,10 +112,10 @@ class Dataloader():
         if self.ipoint < self.numpoint - 0.5:
             coor = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
             if self.force_table: force = np.zeros((self.local_size, self.ncyc, self.batchnode, 3))
-            species = np.zeros((self.local_size, self.ncyc, self.batchnode)) 
+            species = np.full((self.local_size, self.ncyc, self.batchnode), self.reduce_spec[0])
             center_factor = np.zeros((self.local_size, self.ncyc, self.batchnode))
-            neighlist = np.ones((self.local_size, self.ncyc, 2, self.maxneigh), dtype=np.int32)
-            celllist = np.ones((self.local_size, self.ncyc, self.batchnode), dtype=np.int32)
+            neighlist = np.full((self.local_size, self.ncyc, 2, self.maxneigh), self.batchnode - 1, dtype=np.int32)
+            celllist = np.full((self.local_size, self.ncyc, self.batchnode), self.batchsize - 1, dtype=np.int32)
             shiftimage = np.zeros((self.local_size, self.ncyc, 3, self.maxneigh))
             cell = np.tile(np.eye(3), (self.local_size, self.ncyc, self.batchsize, 1, 1))
             if self.stress_table: stress = np.zeros((self.local_size, self.ncyc, self.batchsize, 3, 3))
@@ -184,4 +184,3 @@ class Dataloader():
                 shuffle_list1 = np.random.RandomState(seed=self.seed).permutation(self.shuffle_list[self.ntrain:])
                 self.shuffle_list[self.ntrain:] = shuffle_list1
             raise StopIteration
-

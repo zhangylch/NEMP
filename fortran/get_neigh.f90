@@ -10,6 +10,8 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
      integer(kind=intype),allocatable :: index_numrs(:,:,:,:,:)
      integer(kind=intype),allocatable :: index_rs(:,:,:)
      integer(kind=intype) :: max_neigh_peratom, thread_start_idx
+     integer(kind=intype) :: bucket_overflow, neigh_overflow, neigh_overflow_atom
+     integer(kind=intype) :: bucket_overflow_cell(3)
        
      real(kind=typenum) :: tmp
      real(kind=typenum),intent(in) :: cart(3,numatom)
@@ -23,6 +25,12 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
      integer(kind=intype), allocatable :: local_atomindex(:,:,:) 
      real(kind=typenum), allocatable :: local_shifts(:,:,:)
      ! --------------------
+
+       scutnum = 0
+       bucket_overflow = 0
+       neigh_overflow = 0
+       neigh_overflow_atom = 0
+       bucket_overflow_cell = 0
 
        coor=cart
        fcoor=matmul(inv_matrix,coor)
@@ -46,7 +54,8 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
        do iatom=1,numatom
          coor(:,iatom)=coor(:,iatom)-oriminv
        end do
-       max_neigh_peratom = int((maxneigh / numatom) * capacity)
+       max_neigh_peratom = max(1, ceiling((real(maxneigh, kind=typenum) / &
+                               real(numatom, kind=typenum)) * capacity))
        allocate(index_rs(rangebox(1),rangebox(2),rangebox(3)))
        allocate(index_numrs(2, max_neigh_peratom, rangebox(1),rangebox(2),rangebox(3)))
        index_rs=0
@@ -54,6 +63,7 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
        l=0
        !$OMP PARALLEL DO PRIVATE(i, j, k, l, tmp1, iatom, sca, local_idx) &
        !$OMP SHARED(nimage, shiftvalue, matrix, numatom, imageatom, coor, rangecoor, dier, index_rs, index_numrs) &
+       !$OMP SHARED(max_neigh_peratom, bucket_overflow, bucket_overflow_cell) &
        !$OMP COLLAPSE(3)
        do i=-nimage(3),nimage(3)
          do j=-nimage(2),nimage(2)
@@ -75,13 +85,28 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
                  index_rs(sca(1),sca(2),sca(3))=index_rs(sca(1),sca(2),sca(3))+1
                  local_idx = index_rs(sca(1),sca(2),sca(3))
                  !$OMP END ATOMIC
-                 index_numrs(:,local_idx,sca(1),sca(2),sca(3))=[iatom,l] 
+                 if (local_idx <= max_neigh_peratom) then
+                   index_numrs(:,local_idx,sca(1),sca(2),sca(3))=[iatom,l]
+                 else
+                   !$OMP CRITICAL(bucket_overflow_set)
+                   if (bucket_overflow == 0) then
+                     bucket_overflow = 1
+                     bucket_overflow_cell = sca
+                   end if
+                   !$OMP END CRITICAL(bucket_overflow_set)
+                 end if
                end if
              end do
            end do
          end do
        end do
        !$OMP END PARALLEL DO
+
+       if (bucket_overflow /= 0) then
+         print *, "ERROR: Cell bucket overflow at cell ", bucket_overflow_cell
+         print *, "Increase times_neigh or use a smaller cell-list spacing."
+         goto 999
+       end if
 
        ninit=(length+1)/2
 
@@ -92,7 +117,8 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
        !$OMP PARALLEL DO PRIVATE(iatom, sca, boundary, i, i1, i2, i3, j, l, tmp1, tmp) &
        !$OMP SHARED(numatom, coor, dier, ninit, imageatom, rangebox, interaction, &
        !$OMP index_rs, index_numrs, rcsq, shiftvalue, &
-       !$OMP local_scutnum, local_atomindex, local_shifts, max_neigh_peratom)
+       !$OMP local_scutnum, local_atomindex, local_shifts, max_neigh_peratom, &
+       !$OMP neigh_overflow, neigh_overflow_atom)
        do iatom = 1, numatom
          sca=ceiling(coor(:,iatom)/dier)
   
@@ -108,11 +134,20 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
                  l=index_numrs(2,i,i1,i2,i3)
                  tmp1 = imageatom(:,j,l) - coor(:,iatom)
                  tmp = dot_product(tmp1, tmp1)
-                 if(tmp<=rcsq .and. tmp>0.0001) then
-                   local_scutnum(iatom) = local_scutnum(iatom) + 1
-                   local_atomindex(:, local_scutnum(iatom), iatom) = [iatom-1, j-1]
-                   local_shifts(:, local_scutnum(iatom), iatom) = shiftvalue(:,l)
-                 end if
+                  if(tmp<=rcsq .and. tmp>0.0001) then
+                   if (local_scutnum(iatom) < max_neigh_peratom) then
+                     local_scutnum(iatom) = local_scutnum(iatom) + 1
+                     local_atomindex(:, local_scutnum(iatom), iatom) = [iatom-1, j-1]
+                     local_shifts(:, local_scutnum(iatom), iatom) = shiftvalue(:,l)
+                   else
+                     !$OMP CRITICAL(neigh_overflow_set)
+                     if (neigh_overflow == 0) then
+                       neigh_overflow = 1
+                       neigh_overflow_atom = iatom
+                     end if
+                     !$OMP END CRITICAL(neigh_overflow_set)
+                   end if
+                  end if
                end do
              end do
            end do
@@ -120,33 +155,34 @@ subroutine get_neigh(cart, coor, atomindex, shifts, maxneigh, numatom, scutnum)
        end do
        !$OMP END PARALLEL DO
 
-       scutnum = 0
+       if (neigh_overflow /= 0) then
+         print *, "ERROR: Per-atom neighbor list overflow for atom ", neigh_overflow_atom
+         print *, "Increase times_neigh or maxneigh."
+         goto 999
+       end if
+
        do iatom = 1, numatom
-         if (local_scutnum(iatom) < max_neigh_peratom + 0.5) then
-           thread_start_idx = scutnum + 1
-           scutnum = scutnum + local_scutnum(iatom)
-           
-           if (scutnum > maxneigh) then
-             print *, "ERROR: Total neighbor list overflow. Increase maxneigh."
-             goto 999 
-           end if
-           
-           atomindex(:, thread_start_idx : scutnum) = local_atomindex(:, 1 : local_scutnum(iatom), iatom)
-           shifts(:, thread_start_idx : scutnum) = local_shifts(:, 1 : local_scutnum(iatom), iatom)
-         
-         else if (local_scutnum(iatom) > max_neigh_peratom + 0.5) then
-           print *, "ERROR: Per-atom neighbor list overflow for atom ", iatom
-           print *, "Increase times_neigh."
+         thread_start_idx = scutnum + 1
+         scutnum = scutnum + local_scutnum(iatom)
+
+         if (scutnum > maxneigh) then
+           print *, "ERROR: Total neighbor list overflow. Increase maxneigh."
+           scutnum = thread_start_idx - 1
            goto 999
          end if
+
+         atomindex(:, thread_start_idx : scutnum) = local_atomindex(:, 1 : local_scutnum(iatom), iatom)
+         shifts(:, thread_start_idx : scutnum) = local_shifts(:, 1 : local_scutnum(iatom), iatom)
        end do
  999   continue 
 
-       deallocate(local_atomindex)
-       deallocate(local_shifts)
-       deallocate(index_numrs)
-       deallocate(index_rs)
-       atomindex(:,scutnum+1:maxneigh)=numatom-1
-       shifts(:, scutnum+1:maxneigh)=0.0
+       if (allocated(local_atomindex)) deallocate(local_atomindex)
+       if (allocated(local_shifts)) deallocate(local_shifts)
+       if (allocated(index_numrs)) deallocate(index_numrs)
+       if (allocated(index_rs)) deallocate(index_rs)
+       if (scutnum < maxneigh) then
+         atomindex(:,scutnum+1:maxneigh)=numatom-1
+         shifts(:, scutnum+1:maxneigh)=0.0
+       end if
      return
 end subroutine get_neigh
